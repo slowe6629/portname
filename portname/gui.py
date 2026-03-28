@@ -215,14 +215,28 @@ class PortNameWindow(Gtk.Window):
         except Exception as e:
             self._show_error(f"Failed to toggle Auto-Mute: {e}")
 
+    def _extract_error(self, stderr):
+        """Extract a clean error message from stderr, ignoring tracebacks."""
+        if not stderr or not stderr.strip():
+            return "Authentication cancelled or failed"
+        lines = stderr.strip().splitlines()
+        # Walk backwards to find the last meaningful error line
+        for line in reversed(lines):
+            line = line.strip()
+            if line and not line.startswith(("File ", "Traceback", "During handling")):
+                # Strip exception class prefix if present (e.g. "RuntimeError: ...")
+                if ": " in line and line[0].isupper():
+                    return line.split(": ", 1)[1]
+                return line
+        return lines[-1].strip()
+
     def _do_rename(self, route_name, new_name):
         result = run_as_root(["rename", route_name, new_name])
         if result.returncode == 0:
             self._show_info(f"Renamed to '{new_name}'. Refreshing...")
             GLib.timeout_add(2000, self._build_device_list)
         else:
-            error = result.stderr.strip() or "Authentication cancelled or failed"
-            self._show_error(f"Rename failed: {error}")
+            self._show_error(f"Rename failed: {self._extract_error(result.stderr)}")
 
     def _do_revert(self, route_name):
         result = run_as_root(["revert", route_name])
@@ -230,8 +244,7 @@ class PortNameWindow(Gtk.Window):
             self._show_info("Reverted to original name. Refreshing...")
             GLib.timeout_add(2000, self._build_device_list)
         else:
-            error = result.stderr.strip() or "Authentication cancelled or failed"
-            self._show_error(f"Revert failed: {error}")
+            self._show_error(f"Revert failed: {self._extract_error(result.stderr)}")
 
     def _show_error(self, message):
         dialog = Gtk.MessageDialog(

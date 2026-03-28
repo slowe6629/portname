@@ -47,11 +47,8 @@ def cmd_rename(args):
         rename_port(args.route, args.name)
         print(f"Renamed '{args.route}' to '{args.name}'")
         print("Restarting PipeWire... done.")
-    except FileNotFoundError as e:
+    except (FileNotFoundError, ValueError, RuntimeError, PermissionError) as e:
         print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-    except subprocess.CalledProcessError as e:
-        print(f"Error: {e.stderr or e}", file=sys.stderr)
         sys.exit(1)
 
 
