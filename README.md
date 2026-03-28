@@ -65,10 +65,12 @@ Your custom names survive reboots. The originals are protected from package upda
 
 ## Requirements
 
-- Linux with PipeWire (standard on Linux Mint 22+, Ubuntu 22.10+, Fedora 34+)
+- **Debian/Ubuntu-based distro** (Linux Mint, Ubuntu, Pop!_OS, etc.) — required for `dpkg-divert` backup support
+- PipeWire (standard on Linux Mint 22+, Ubuntu 22.10+)
 - Python 3.8+
 - GTK3 via PyGObject (pre-installed on most desktop Linux distros)
-- Debian/Ubuntu-based distro (for `dpkg-divert` support)
+
+**Note:** Currently only tested on Linux Mint 22. Does not work on non-Debian distros (Fedora, Arch) due to `dpkg-divert` dependency, or on distros still using PulseAudio without PipeWire.
 
 ## Uninstall
 
