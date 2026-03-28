@@ -3,9 +3,24 @@
 import json
 import os
 import pwd
+import re
+import shutil
 import subprocess
 
 PATHS_DIR = "/usr/share/alsa-card-profile/mixer/paths"
+
+# Port names must be reasonable: 1-64 chars, no control characters
+_VALID_NAME_RE = re.compile(r"^[^\x00-\x1f]{1,64}$")
+
+
+def validate_port_name(name):
+    """Validate a port display name. Raises ValueError if invalid."""
+    if not name or not name.strip():
+        raise ValueError("Port name cannot be empty")
+    name = name.strip()
+    if not _VALID_NAME_RE.match(name):
+        raise ValueError("Port name must be 1-64 characters with no control characters")
+    return name
 
 
 def get_devices():
@@ -15,10 +30,25 @@ def get_devices():
         [{"device_name": str, "device_description": str, "alsa_card": str,
           "routes": [{"name": str, "description": str, "direction": str, "available": str}]}]
     """
-    result = subprocess.run(
-        ["pw-dump"], capture_output=True, text=True, check=True
-    )
-    data = json.loads(result.stdout)
+    if not shutil.which("pw-dump"):
+        raise RuntimeError(
+            "pw-dump not found. Is PipeWire installed?\n"
+            "Install with: sudo apt install pipewire"
+        )
+
+    try:
+        result = subprocess.run(
+            ["pw-dump"], capture_output=True, text=True, check=True, timeout=10
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("pw-dump timed out — PipeWire may not be running")
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"pw-dump failed: {e.stderr.strip() or 'unknown error'}")
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        raise RuntimeError("pw-dump returned invalid JSON — PipeWire may be misconfigured")
 
     devices = []
     for obj in data:
@@ -86,28 +116,34 @@ def get_original_description(route_name):
 def _read_description(filepath):
     """Read the description or description-key from a path file's [General] section."""
     in_general = False
-    with open(filepath) as f:
-        for line in f:
-            stripped = line.strip()
-            if stripped == "[General]":
-                in_general = True
-                continue
-            if stripped.startswith("[") and stripped.endswith("]"):
+    try:
+        with open(filepath) as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped == "[General]":
+                    in_general = True
+                    continue
+                if stripped.startswith("[") and stripped.endswith("]"):
+                    if in_general:
+                        break
+                    continue
                 if in_general:
-                    break
-                continue
-            if in_general:
-                if stripped.startswith("description ="):
-                    return stripped.split("=", 1)[1].strip()
-                if stripped.startswith("description-key ="):
-                    return stripped.split("=", 1)[1].strip()
+                    if stripped.startswith("description ="):
+                        return stripped.split("=", 1)[1].strip()
+                    if stripped.startswith("description-key ="):
+                        return stripped.split("=", 1)[1].strip()
+    except (OSError, UnicodeDecodeError):
+        return None
     return None
 
 
 def _modify_description(orig_path, new_description):
     """Read a path file and return modified content with a new description."""
-    with open(orig_path) as f:
-        lines = f.readlines()
+    try:
+        with open(orig_path) as f:
+            lines = f.readlines()
+    except OSError as e:
+        raise RuntimeError(f"Cannot read path file {orig_path}: {e}")
 
     in_general = False
     found = False
@@ -129,6 +165,12 @@ def _modify_description(orig_path, new_description):
         else:
             result.append(line)
 
+    if not found:
+        raise RuntimeError(
+            f"Could not find description field in [General] section of {orig_path}. "
+            "The file may be corrupted or in an unexpected format."
+        )
+
     return "".join(result)
 
 
@@ -137,19 +179,26 @@ def rename_port(route_name, new_name):
     if os.geteuid() != 0:
         raise PermissionError("Must be run as root")
 
+    new_name = validate_port_name(new_name)
     path = get_path_file(route_name)
 
     # Set up dpkg-divert if not already done
     if not is_renamed(route_name):
-        subprocess.run(
-            ["dpkg-divert", "--local", "--rename", "--add", path],
-            check=True, capture_output=True, text=True,
-        )
+        try:
+            subprocess.run(
+                ["dpkg-divert", "--local", "--rename", "--add", path],
+                check=True, capture_output=True, text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"dpkg-divert failed: {e.stderr.strip() or 'unknown error'}")
 
     # Read from .orig, write modified version to the main path
     content = _modify_description(path + ".orig", new_name)
-    with open(path, "w") as f:
-        f.write(content)
+    try:
+        with open(path, "w") as f:
+            f.write(content)
+    except OSError as e:
+        raise RuntimeError(f"Cannot write to {path}: {e}")
 
     restart_pipewire()
 
@@ -169,10 +218,13 @@ def revert_port(route_name):
         os.remove(path)
 
     # Remove the divert (restores .orig to original location)
-    subprocess.run(
-        ["dpkg-divert", "--local", "--rename", "--remove", path],
-        check=True, capture_output=True, text=True,
-    )
+    try:
+        subprocess.run(
+            ["dpkg-divert", "--local", "--rename", "--remove", path],
+            check=True, capture_output=True, text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"dpkg-divert revert failed: {e.stderr.strip() or 'unknown error'}")
 
     restart_pipewire()
 
@@ -240,18 +292,23 @@ def _get_real_user():
 
 def restart_pipewire():
     """Restart PipeWire services. Runs as the real user if we're root via sudo/pkexec."""
-    if os.geteuid() == 0:
-        user, uid = _get_real_user()
-        subprocess.run(
-            ["sudo", "-u", user,
-             f"XDG_RUNTIME_DIR=/run/user/{uid}",
-             "systemctl", "--user", "restart",
-             "pipewire", "pipewire-pulse", "wireplumber"],
-            check=True, capture_output=True, text=True,
-        )
-    else:
-        subprocess.run(
-            ["systemctl", "--user", "restart",
-             "pipewire", "pipewire-pulse", "wireplumber"],
-            check=True, capture_output=True, text=True,
-        )
+    try:
+        if os.geteuid() == 0:
+            user, uid = _get_real_user()
+            subprocess.run(
+                ["sudo", "-u", user,
+                 f"XDG_RUNTIME_DIR=/run/user/{uid}",
+                 "systemctl", "--user", "restart",
+                 "pipewire", "pipewire-pulse", "wireplumber"],
+                check=True, capture_output=True, text=True, timeout=15,
+            )
+        else:
+            subprocess.run(
+                ["systemctl", "--user", "restart",
+                 "pipewire", "pipewire-pulse", "wireplumber"],
+                check=True, capture_output=True, text=True, timeout=15,
+            )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("PipeWire restart timed out")
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"PipeWire restart failed: {e.stderr.strip() or 'unknown error'}")

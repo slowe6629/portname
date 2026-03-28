@@ -4,7 +4,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib, Pango  # noqa: E402
 
-from portname.core import get_devices, is_renamed, get_original_description
+from portname.core import get_devices, is_renamed, get_original_description, validate_port_name
 from portname.automute import get_auto_mute_status, set_auto_mute
 from portname.privilege import run_as_root
 
@@ -180,6 +180,11 @@ class PortNameWindow(Gtk.Window):
         dialog.destroy()
 
         if response == Gtk.ResponseType.OK and new_name and new_name != route["description"]:
+            try:
+                validate_port_name(new_name)
+            except ValueError as e:
+                self._show_error(str(e))
+                return
             self._do_rename(route["name"], new_name)
 
     def _on_revert_clicked(self, button, route):

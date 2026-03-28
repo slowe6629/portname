@@ -11,6 +11,7 @@ from portname.core import (
     _modify_description,
     get_devices,
     is_renamed,
+    validate_port_name,
 )
 
 
@@ -46,6 +47,15 @@ switch = mute
 volume = merge
 
 .include analog-output.conf.common
+"""
+
+SAMPLE_PATH_FILE_NO_DESCRIPTION = """# Broken file
+
+[General]
+priority = 90
+
+[Jack Line Out]
+required-any = any
 """
 
 SAMPLE_PW_DUMP = [
@@ -90,6 +100,37 @@ SAMPLE_PW_DUMP = [
 ]
 
 
+class TestValidatePortName(unittest.TestCase):
+    def test_valid_name(self):
+        self.assertEqual(validate_port_name("JBL Headset"), "JBL Headset")
+
+    def test_strips_whitespace(self):
+        self.assertEqual(validate_port_name("  My Speaker  "), "My Speaker")
+
+    def test_empty_string_raises(self):
+        with self.assertRaises(ValueError):
+            validate_port_name("")
+
+    def test_whitespace_only_raises(self):
+        with self.assertRaises(ValueError):
+            validate_port_name("   ")
+
+    def test_control_chars_raises(self):
+        with self.assertRaises(ValueError):
+            validate_port_name("Bad\x00Name")
+
+    def test_too_long_raises(self):
+        with self.assertRaises(ValueError):
+            validate_port_name("A" * 65)
+
+    def test_max_length_ok(self):
+        name = "A" * 64
+        self.assertEqual(validate_port_name(name), name)
+
+    def test_unicode_ok(self):
+        self.assertEqual(validate_port_name("Haut-parleurs"), "Haut-parleurs")
+
+
 class TestReadDescription(unittest.TestCase):
     def test_reads_description_key(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".conf", delete=False) as f:
@@ -106,6 +147,18 @@ class TestReadDescription(unittest.TestCase):
             result = _read_description(f.name)
         os.unlink(f.name)
         self.assertEqual(result, "JBL Headset")
+
+    def test_returns_none_for_missing_description(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".conf", delete=False) as f:
+            f.write(SAMPLE_PATH_FILE_NO_DESCRIPTION)
+            f.flush()
+            result = _read_description(f.name)
+        os.unlink(f.name)
+        self.assertIsNone(result)
+
+    def test_returns_none_for_nonexistent_file(self):
+        result = _read_description("/nonexistent/path.conf")
+        self.assertIsNone(result)
 
 
 class TestModifyDescription(unittest.TestCase):
@@ -138,11 +191,24 @@ class TestModifyDescription(unittest.TestCase):
         self.assertIn("priority = 90", result)
         self.assertIn(".include analog-output.conf.common", result)
 
+    def test_raises_on_missing_description(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".conf", delete=False) as f:
+            f.write(SAMPLE_PATH_FILE_NO_DESCRIPTION)
+            f.flush()
+            with self.assertRaises(RuntimeError):
+                _modify_description(f.name, "Test")
+        os.unlink(f.name)
+
+    def test_raises_on_nonexistent_file(self):
+        with self.assertRaises(RuntimeError):
+            _modify_description("/nonexistent/path.conf", "Test")
+
 
 class TestGetDevices(unittest.TestCase):
     @patch("portname.core.os.path.exists")
+    @patch("portname.core.shutil.which", return_value="/usr/bin/pw-dump")
     @patch("portname.core.subprocess.run")
-    def test_parses_pw_dump(self, mock_run, mock_exists):
+    def test_parses_pw_dump(self, mock_run, mock_which, mock_exists):
         mock_run.return_value = MagicMock(
             stdout=json.dumps(SAMPLE_PW_DUMP),
             returncode=0,
@@ -158,6 +224,20 @@ class TestGetDevices(unittest.TestCase):
         self.assertEqual(len(dev["routes"]), 3)
         self.assertEqual(dev["routes"][0]["name"], "analog-output-lineout")
         self.assertEqual(dev["routes"][0]["direction"], "Output")
+
+    @patch("portname.core.shutil.which", return_value=None)
+    def test_raises_when_pw_dump_missing(self, mock_which):
+        with self.assertRaises(RuntimeError) as ctx:
+            get_devices()
+        self.assertIn("pw-dump not found", str(ctx.exception))
+
+    @patch("portname.core.shutil.which", return_value="/usr/bin/pw-dump")
+    @patch("portname.core.subprocess.run")
+    def test_raises_on_invalid_json(self, mock_run, mock_which):
+        mock_run.return_value = MagicMock(stdout="not json", returncode=0)
+        with self.assertRaises(RuntimeError) as ctx:
+            get_devices()
+        self.assertIn("invalid JSON", str(ctx.exception))
 
 
 class TestIsRenamed(unittest.TestCase):
