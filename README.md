@@ -18,7 +18,7 @@ Before:                              After:
 ## Install
 
 ```bash
-git clone https://github.com/slowe/portname.git
+git clone https://github.com/slowe6629/portname.git
 cd portname
 chmod +x install.sh
 ./install.sh

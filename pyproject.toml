@@ -26,5 +26,5 @@ classifiers = [
 portname = "portname.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/slowe/portname"
-Issues = "https://github.com/slowe/portname/issues"
+Homepage = "https://github.com/slowe6629/portname"
+Issues = "https://github.com/slowe6629/portname/issues"
