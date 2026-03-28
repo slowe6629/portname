@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "portname"
+version = "1.0.0"
+description = "Rename PipeWire/ALSA audio ports as they appear in Sound Settings"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.8"
+dependencies = []
+keywords = ["pipewire", "alsa", "audio", "pulseaudio", "linux", "rename"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: X11 Applications :: GTK",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+
+[project.scripts]
+portname = "portname.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/slowe/portname"
+Issues = "https://github.com/slowe/portname/issues"

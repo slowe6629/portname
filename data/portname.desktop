@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Portname
+Comment=Rename audio ports in Sound Settings
+Exec=portname gui
+Icon=audio-card
+Terminal=false
+Type=Application
+Categories=Settings;HardwareSettings;Audio;
+Keywords=audio;sound;rename;port;pipewire;alsa;
