@@ -186,7 +186,7 @@ def rename_port(route_name, new_name):
     if not is_renamed(route_name):
         try:
             subprocess.run(
-                ["dpkg-divert", "--local", "--rename", "--add", path],
+                ["dpkg-divert", "--local", "--rename", "--divert", path + ".orig", "--add", path],
                 check=True, capture_output=True, text=True,
             )
         except subprocess.CalledProcessError as e:
@@ -220,7 +220,7 @@ def revert_port(route_name):
     # Remove the divert (restores .orig to original location)
     try:
         subprocess.run(
-            ["dpkg-divert", "--local", "--rename", "--remove", path],
+            ["dpkg-divert", "--local", "--rename", "--divert", path + ".orig", "--remove", path],
             check=True, capture_output=True, text=True,
         )
     except subprocess.CalledProcessError as e:
@@ -296,7 +296,7 @@ def restart_pipewire():
         if os.geteuid() == 0:
             user, uid = _get_real_user()
             subprocess.run(
-                ["sudo", "-u", user,
+                ["sudo", "-u", user, "env",
                  f"XDG_RUNTIME_DIR=/run/user/{uid}",
                  "systemctl", "--user", "restart",
                  "pipewire", "pipewire-pulse", "wireplumber"],
