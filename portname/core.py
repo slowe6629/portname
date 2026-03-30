@@ -1,13 +1,18 @@
 """Core business logic for portname: reading devices, renaming ports, reverting."""
 
 import json
+import logging
 import os
 import pwd
 import re
 import shutil
 import subprocess
 
-PATHS_DIR = "/usr/share/alsa-card-profile/mixer/paths"
+log = logging.getLogger(__name__)
+
+PATHS_DIR = os.environ.get(
+    "PORTNAME_PATHS_DIR", "/usr/share/alsa-card-profile/mixer/paths"
+)
 
 # Port names must be reasonable: 1-64 chars, no control characters
 _VALID_NAME_RE = re.compile(r"^[^\x00-\x1f]{1,64}$")
@@ -30,6 +35,7 @@ def get_devices():
         [{"device_name": str, "device_description": str, "alsa_card": str,
           "routes": [{"name": str, "description": str, "direction": str, "available": str}]}]
     """
+    log.debug("Discovering audio devices via pw-dump")
     if not shutil.which("pw-dump"):
         raise RuntimeError(
             "pw-dump not found. Is PipeWire installed?\n"
@@ -41,13 +47,16 @@ def get_devices():
             ["pw-dump"], capture_output=True, text=True, check=True, timeout=10
         )
     except subprocess.TimeoutExpired:
+        log.error("pw-dump timed out")
         raise RuntimeError("pw-dump timed out — PipeWire may not be running")
     except subprocess.CalledProcessError as e:
+        log.error("pw-dump failed: %s", e.stderr.strip())
         raise RuntimeError(f"pw-dump failed: {e.stderr.strip() or 'unknown error'}")
 
     try:
         data = json.loads(result.stdout)
     except json.JSONDecodeError:
+        log.error("pw-dump returned invalid JSON")
         raise RuntimeError("pw-dump returned invalid JSON — PipeWire may be misconfigured")
 
     devices = []
@@ -87,6 +96,8 @@ def get_devices():
                 "routes": routes,
             })
 
+    log.info("Found %d device(s) with %d total route(s)",
+             len(devices), sum(len(d["routes"]) for d in devices))
     return devices
 
 
@@ -181,15 +192,19 @@ def rename_port(route_name, new_name):
 
     new_name = validate_port_name(new_name)
     path = get_path_file(route_name)
+    log.info("Renaming port '%s' to '%s'", route_name, new_name)
+    log.debug("Path file: %s", path)
 
     # Set up dpkg-divert if not already done
     if not is_renamed(route_name):
+        log.debug("Setting up dpkg-divert for %s", path)
         try:
             subprocess.run(
                 ["dpkg-divert", "--local", "--rename", "--divert", path + ".orig", "--add", path],
                 check=True, capture_output=True, text=True,
             )
         except subprocess.CalledProcessError as e:
+            log.error("dpkg-divert failed: %s", e.stderr.strip())
             raise RuntimeError(f"dpkg-divert failed: {e.stderr.strip() or 'unknown error'}")
 
     # Read from .orig, write modified version to the main path
@@ -198,9 +213,11 @@ def rename_port(route_name, new_name):
         with open(path, "w") as f:
             f.write(content)
     except OSError as e:
+        log.error("Cannot write to %s: %s", path, e)
         raise RuntimeError(f"Cannot write to {path}: {e}")
 
     restart_pipewire()
+    log.info("Port '%s' renamed successfully", route_name)
 
 
 def revert_port(route_name):
@@ -209,6 +226,7 @@ def revert_port(route_name):
         raise PermissionError("Must be run as root")
 
     path = get_path_file(route_name)
+    log.info("Reverting port '%s'", route_name)
 
     if not is_renamed(route_name):
         raise ValueError(f"Port '{route_name}' has not been renamed")
@@ -218,15 +236,18 @@ def revert_port(route_name):
         os.remove(path)
 
     # Remove the divert (restores .orig to original location)
+    log.debug("Removing dpkg-divert for %s", path)
     try:
         subprocess.run(
             ["dpkg-divert", "--local", "--rename", "--divert", path + ".orig", "--remove", path],
             check=True, capture_output=True, text=True,
         )
     except subprocess.CalledProcessError as e:
+        log.error("dpkg-divert revert failed: %s", e.stderr.strip())
         raise RuntimeError(f"dpkg-divert revert failed: {e.stderr.strip() or 'unknown error'}")
 
     restart_pipewire()
+    log.info("Port '%s' reverted successfully", route_name)
 
 
 def revert_all():
@@ -292,6 +313,7 @@ def _get_real_user():
 
 def restart_pipewire():
     """Restart PipeWire services. Runs as the real user if we're root via sudo/pkexec."""
+    log.info("Restarting PipeWire services")
     try:
         if os.geteuid() == 0:
             user, uid = _get_real_user()
@@ -309,6 +331,9 @@ def restart_pipewire():
                 check=True, capture_output=True, text=True, timeout=15,
             )
     except subprocess.TimeoutExpired:
+        log.error("PipeWire restart timed out after 15s")
         raise RuntimeError("PipeWire restart timed out")
     except subprocess.CalledProcessError as e:
+        log.error("PipeWire restart failed: %s", e.stderr.strip())
         raise RuntimeError(f"PipeWire restart failed: {e.stderr.strip() or 'unknown error'}")
+    log.debug("PipeWire services restarted")

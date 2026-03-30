@@ -1,5 +1,10 @@
 """GTK3 GUI for portname."""
 
+import logging
+import subprocess
+import threading
+import time
+
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib, Pango  # noqa: E402
@@ -7,6 +12,8 @@ from gi.repository import Gtk, GLib, Pango  # noqa: E402
 from portname.core import get_devices, is_renamed, get_original_description, validate_port_name
 from portname.automute import get_auto_mute_status, set_auto_mute
 from portname.privilege import run_as_root
+
+log = logging.getLogger(__name__)
 
 
 class PortNameWindow(Gtk.Window):
@@ -230,11 +237,32 @@ class PortNameWindow(Gtk.Window):
                 return line
         return lines[-1].strip()
 
+    def _wait_for_pipewire_and_refresh(self):
+        """Poll pw-dump in a background thread until PipeWire is ready, then refresh."""
+        def _poll():
+            for attempt in range(10):
+                time.sleep(0.5)
+                try:
+                    result = subprocess.run(
+                        ["pw-dump"], capture_output=True, text=True, timeout=5,
+                    )
+                    if result.returncode == 0:
+                        log.debug("PipeWire ready after %.1fs", (attempt + 1) * 0.5)
+                        GLib.idle_add(self._build_device_list)
+                        return
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
+                log.debug("PipeWire not ready yet (attempt %d/10)", attempt + 1)
+            log.warning("PipeWire did not become ready within 5s, refreshing anyway")
+            GLib.idle_add(self._build_device_list)
+
+        threading.Thread(target=_poll, daemon=True).start()
+
     def _do_rename(self, route_name, new_name):
         result = run_as_root(["rename", route_name, new_name])
         if result.returncode == 0:
             self._show_info(f"Renamed to '{new_name}'. Refreshing...")
-            GLib.timeout_add(2000, self._build_device_list)
+            self._wait_for_pipewire_and_refresh()
         else:
             self._show_error(f"Rename failed: {self._extract_error(result.stderr)}")
 
@@ -242,7 +270,7 @@ class PortNameWindow(Gtk.Window):
         result = run_as_root(["revert", route_name])
         if result.returncode == 0:
             self._show_info("Reverted to original name. Refreshing...")
-            GLib.timeout_add(2000, self._build_device_list)
+            self._wait_for_pipewire_and_refresh()
         else:
             self._show_error(f"Revert failed: {self._extract_error(result.stderr)}")
 

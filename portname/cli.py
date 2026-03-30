@@ -1,6 +1,7 @@
 """Command-line interface for portname."""
 
 import argparse
+import logging
 import subprocess
 import sys
 
@@ -125,6 +126,10 @@ def main():
         description="Rename PipeWire/ALSA audio ports as they appear in Sound Settings",
     )
     parser.add_argument("--version", action="version", version=f"portname {__version__}")
+    parser.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="Enable verbose/debug logging",
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     # list
@@ -149,6 +154,11 @@ def main():
     subparsers.add_parser("gui", help="Launch graphical interface")
 
     args = parser.parse_args()
+
+    logging.basicConfig(
+        format="%(levelname)s: %(name)s: %(message)s",
+        level=logging.DEBUG if getattr(args, "verbose", False) else logging.WARNING,
+    )
 
     if args.command is None:
         # Default to GUI if no command given
