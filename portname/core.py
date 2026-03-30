@@ -294,6 +294,65 @@ def get_all_renamed():
     return renamed
 
 
+def repair_distrib_diversions():
+    """Fix broken state left by old versions that used dpkg-divert without --divert.
+
+    On some systems (e.g. Linux Mint), dpkg-divert defaults to a .distrib suffix
+    instead of .orig. The old code assumed .orig, so failed renames left .distrib
+    files behind with an active diversion — making ports vanish from the list.
+
+    This scans for those orphaned diversions, removes them, and restores the
+    original .conf files. Must be run as root.
+
+    Returns a list of repaired route names.
+    """
+    if os.geteuid() != 0:
+        raise PermissionError("Must be run as root")
+
+    result = subprocess.run(
+        ["dpkg-divert", "--list"], capture_output=True, text=True
+    )
+
+    repaired = []
+    for line in result.stdout.splitlines():
+        if PATHS_DIR not in line or "local diversion" not in line:
+            continue
+
+        # Parse: "local diversion of /path/file.conf to /path/file.conf.distrib"
+        parts = line.split()
+        try:
+            of_idx = parts.index("of")
+            to_idx = parts.index("to")
+            path = parts[of_idx + 1]
+            divert_target = parts[to_idx + 1]
+        except (ValueError, IndexError):
+            continue
+
+        # Only fix .distrib diversions (the broken ones), skip .orig (working ones)
+        if not divert_target.endswith(".distrib"):
+            continue
+
+        route_name = os.path.basename(path).replace(".conf", "")
+        log.info("Repairing broken diversion for '%s' (%s)", route_name, divert_target)
+
+        # Remove the broken diversion — this restores .distrib back to .conf
+        try:
+            subprocess.run(
+                ["dpkg-divert", "--local", "--rename", "--remove", path],
+                check=True, capture_output=True, text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            log.error("Failed to repair '%s': %s", route_name, e.stderr.strip())
+            continue
+
+        repaired.append(route_name)
+
+    if repaired:
+        restart_pipewire()
+
+    return repaired
+
+
 def _get_real_user():
     """Get the real logged-in user when running under sudo/pkexec."""
     # Try SUDO_USER first

@@ -209,5 +209,70 @@ class TestGetAllRenamed(unittest.TestCase):
         self.assertEqual(renamed, ["analog-output-lineout"])
 
 
+class TestRepairDistribDiversions(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self._orig_paths_dir = core.PATHS_DIR
+        core.PATHS_DIR = self.tmpdir
+
+    def tearDown(self):
+        core.PATHS_DIR = self._orig_paths_dir
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @patch("portname.core.restart_pipewire")
+    @patch("portname.core.subprocess.run")
+    @patch("os.geteuid", return_value=0)
+    def test_repairs_distrib_diversions(self, mock_euid, mock_run, mock_restart):
+        divert_output = (
+            f"local diversion of {self.tmpdir}/analog-output-lineout.conf "
+            f"to {self.tmpdir}/analog-output-lineout.conf.distrib\n"
+            f"local diversion of {self.tmpdir}/analog-output-headphones.conf "
+            f"to {self.tmpdir}/analog-output-headphones.conf.distrib\n"
+        )
+        # First call is --list, subsequent calls are --remove
+        mock_run.side_effect = [
+            MagicMock(stdout=divert_output, returncode=0),
+            MagicMock(returncode=0),
+            MagicMock(returncode=0),
+        ]
+
+        repaired = core.repair_distrib_diversions()
+
+        self.assertEqual(repaired, ["analog-output-lineout", "analog-output-headphones"])
+        # Should have restarted PipeWire once
+        mock_restart.assert_called_once()
+
+    @patch("portname.core.subprocess.run")
+    @patch("os.geteuid", return_value=0)
+    def test_skips_orig_diversions(self, mock_euid, mock_run):
+        """Working .orig diversions should not be touched."""
+        divert_output = (
+            f"local diversion of {self.tmpdir}/analog-output-lineout.conf "
+            f"to {self.tmpdir}/analog-output-lineout.conf.orig\n"
+        )
+        mock_run.return_value = MagicMock(stdout=divert_output, returncode=0)
+
+        repaired = core.repair_distrib_diversions()
+
+        self.assertEqual(repaired, [])
+        # Only the --list call should have happened
+        mock_run.assert_called_once()
+
+    @patch("portname.core.subprocess.run")
+    @patch("os.geteuid", return_value=0)
+    def test_nothing_to_repair(self, mock_euid, mock_run):
+        mock_run.return_value = MagicMock(stdout="", returncode=0)
+
+        repaired = core.repair_distrib_diversions()
+
+        self.assertEqual(repaired, [])
+
+    @patch("os.geteuid", return_value=1000)
+    def test_requires_root(self, mock_euid):
+        with self.assertRaises(PermissionError):
+            core.repair_distrib_diversions()
+
+
 if __name__ == "__main__":
     unittest.main()
