@@ -1,6 +1,9 @@
 """Auto-Mute Mode control via amixer."""
 
+import logging
 import subprocess
+
+log = logging.getLogger(__name__)
 
 
 def get_auto_mute_status(card):
@@ -26,6 +29,7 @@ def get_auto_mute_status(card):
 def set_auto_mute(card, enabled):
     """Set Auto-Mute Mode for an ALSA card."""
     value = "Enabled" if enabled else "Disabled"
+    log.info("Setting Auto-Mute Mode on card %s to %s", card, value)
     subprocess.run(
         ["amixer", "-c", str(card), "sset", "Auto-Mute Mode", value],
         capture_output=True, text=True, check=True,

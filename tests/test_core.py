@@ -240,6 +240,23 @@ class TestGetDevices(unittest.TestCase):
         self.assertIn("invalid JSON", str(ctx.exception))
 
 
+class TestGetPathFile(unittest.TestCase):
+    def test_rejects_path_traversal(self):
+        from portname.core import get_path_file
+        with self.assertRaises(ValueError):
+            get_path_file("../../etc/passwd")
+
+    def test_rejects_slashes(self):
+        from portname.core import get_path_file
+        with self.assertRaises(ValueError):
+            get_path_file("some/nested/route")
+
+    def test_rejects_backslashes(self):
+        from portname.core import get_path_file
+        with self.assertRaises(ValueError):
+            get_path_file("some\\route")
+
+
 class TestIsRenamed(unittest.TestCase):
     @patch("portname.core.os.path.exists")
     def test_returns_true_when_orig_exists(self, mock_exists):

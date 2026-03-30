@@ -1,13 +1,14 @@
 """Command-line interface for portname."""
 
 import argparse
+import logging
 import subprocess
 import sys
 
 from portname import __version__
 from portname.core import (
     get_devices, is_renamed, get_original_description,
-    rename_port, revert_port, revert_all,
+    rename_port, revert_port, revert_all, repair_distrib_diversions,
 )
 from portname.automute import get_auto_mute_status, set_auto_mute, get_cards_with_auto_mute
 from portname.privilege import ensure_root_or_exit
@@ -108,6 +109,22 @@ def cmd_auto_mute(args):
         print(f"Auto-Mute Mode on card {card}: Disabled")
 
 
+def cmd_repair(args):
+    """Repair broken state from old portname versions."""
+    ensure_root_or_exit()
+    try:
+        repaired = repair_distrib_diversions()
+        if repaired:
+            for name in repaired:
+                print(f"Repaired '{name}'")
+            print(f"Restored {len(repaired)} port(s). Restarting PipeWire... done.")
+        else:
+            print("No broken diversions found. Everything looks good.")
+    except RuntimeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_gui(args):
     """Launch the GUI."""
     try:
@@ -125,6 +142,10 @@ def main():
         description="Rename PipeWire/ALSA audio ports as they appear in Sound Settings",
     )
     parser.add_argument("--version", action="version", version=f"portname {__version__}")
+    parser.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="Enable verbose/debug logging",
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     # list
@@ -145,10 +166,18 @@ def main():
     am_p.add_argument("state", nargs="?", choices=["on", "off", "status"], default="status")
     am_p.add_argument("--card", "-c", help="ALSA card number")
 
+    # repair
+    subparsers.add_parser("repair", help="Fix ports broken by old portname versions (requires sudo)")
+
     # gui
     subparsers.add_parser("gui", help="Launch graphical interface")
 
     args = parser.parse_args()
+
+    logging.basicConfig(
+        format="%(levelname)s: %(name)s: %(message)s",
+        level=logging.DEBUG if getattr(args, "verbose", False) else logging.WARNING,
+    )
 
     if args.command is None:
         # Default to GUI if no command given
@@ -161,6 +190,8 @@ def main():
         cmd_revert(args)
     elif args.command == "auto-mute":
         cmd_auto_mute(args)
+    elif args.command == "repair":
+        cmd_repair(args)
     elif args.command == "gui":
         cmd_gui(args)
 
