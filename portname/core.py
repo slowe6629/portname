@@ -10,9 +10,14 @@ import subprocess
 
 log = logging.getLogger(__name__)
 
-PATHS_DIR = os.environ.get(
-    "PORTNAME_PATHS_DIR", "/usr/share/alsa-card-profile/mixer/paths"
-)
+_DEFAULT_PATHS_DIR = "/usr/share/alsa-card-profile/mixer/paths"
+
+# Allow override for testing, but ignore it when running as root to prevent
+# a malicious env var from redirecting file operations during privilege escalation.
+if os.geteuid() == 0:
+    PATHS_DIR = _DEFAULT_PATHS_DIR
+else:
+    PATHS_DIR = os.environ.get("PORTNAME_PATHS_DIR", _DEFAULT_PATHS_DIR)
 
 # Port names must be reasonable: 1-64 chars, no control characters
 _VALID_NAME_RE = re.compile(r"^[^\x00-\x1f]{1,64}$")
@@ -103,6 +108,8 @@ def get_devices():
 
 def get_path_file(route_name):
     """Return the full path to the ALSA path config file for a route."""
+    if ".." in route_name or "/" in route_name or "\\" in route_name:
+        raise ValueError(f"Invalid route name: {route_name}")
     path = os.path.join(PATHS_DIR, f"{route_name}.conf")
     if not os.path.exists(path) and not os.path.exists(path + ".orig"):
         raise FileNotFoundError(f"No path file found for route '{route_name}'")
