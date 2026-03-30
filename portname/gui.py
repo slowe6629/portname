@@ -55,6 +55,21 @@ class PortNameWindow(Gtk.Window):
         for dev in devices:
             self._add_device_section(dev)
 
+        # Repair button for users hit by the old dpkg-divert bug
+        repair_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        repair_box.set_margin_top(8)
+        repair_label = Gtk.Label()
+        repair_label.set_markup(
+            "<small>Ports missing? An older version may have broken them.</small>"
+        )
+        repair_label.set_halign(Gtk.Align.START)
+        repair_label.get_style_context().add_class("dim-label")
+        repair_box.pack_start(repair_label, True, True, 0)
+        repair_btn = Gtk.Button(label="Repair")
+        repair_btn.connect("clicked", self._on_repair_clicked)
+        repair_box.pack_end(repair_btn, False, False, 0)
+        self.main_box.pack_end(repair_box, False, False, 0)
+
         self.main_box.show_all()
 
     def _add_device_section(self, dev):
@@ -257,6 +272,29 @@ class PortNameWindow(Gtk.Window):
             GLib.idle_add(self._build_device_list)
 
         threading.Thread(target=_poll, daemon=True).start()
+
+    def _on_repair_clicked(self, button):
+        dialog = Gtk.MessageDialog(
+            parent=self,
+            flags=Gtk.DialogFlags.MODAL,
+            type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.YES_NO,
+            message_format="Scan for and fix ports broken by an older version of Portname?",
+        )
+        response = dialog.run()
+        dialog.destroy()
+
+        if response == Gtk.ResponseType.YES:
+            result = run_as_root(["repair"])
+            if result.returncode == 0:
+                output = result.stdout.strip()
+                if "No broken diversions" in output:
+                    self._show_info("No broken ports found. Everything looks good.")
+                else:
+                    self._show_info(output)
+                    self._wait_for_pipewire_and_refresh()
+            else:
+                self._show_error(f"Repair failed: {self._extract_error(result.stderr)}")
 
     def _do_rename(self, route_name, new_name):
         result = run_as_root(["rename", route_name, new_name])
