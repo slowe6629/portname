@@ -326,11 +326,16 @@ def revert_port(route_name, method="path_file", node_name=None):
 
 
 def revert_all():
-    """Revert all renamed ports (both path-file and WirePlumber). Must be run as root."""
+    """Revert all renamed ports (both path-file and WirePlumber). Must be run as root.
+
+    Continues past individual failures so that one broken revert does not
+    prevent the rest from being reverted.
+    """
     if os.geteuid() != 0:
         raise PermissionError("Must be run as root")
 
     reverted = []
+    errors = []
 
     # Revert ALSA path file renames
     result = subprocess.run(
@@ -348,10 +353,20 @@ def revert_all():
                 reverted.append(route_name)
             except (ValueError, IndexError):
                 continue
+            except (RuntimeError, PermissionError) as e:
+                log.error("Failed to revert '%s': %s", route_name, e)
+                errors.append(f"{route_name}: {e}")
 
     # Revert WirePlumber USB renames
-    usb_reverted = wireplumber.revert_all()
-    reverted.extend(usb_reverted)
+    try:
+        usb_reverted = wireplumber.revert_all()
+        reverted.extend(usb_reverted)
+    except RuntimeError as e:
+        log.error("Failed to revert some USB renames: %s", e)
+        errors.append(str(e))
+
+    if errors:
+        log.warning("Some reverts failed: %s", "; ".join(errors))
 
     return reverted
 

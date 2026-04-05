@@ -3,6 +3,7 @@
 import logging
 import os
 import re
+import stat
 
 log = logging.getLogger(__name__)
 
@@ -19,11 +20,30 @@ else:
 # Prefix for config files created by portname
 _FILE_PREFIX = "90-portname-"
 
+# Node names: alphanumeric, dots, dashes, underscores, colons (PipeWire convention)
+_VALID_NODE_NAME_RE = re.compile(r"^[a-zA-Z0-9._:+-]{1,256}$")
+
+
+def validate_node_name(node_name):
+    """Validate a PipeWire node name. Raises ValueError if invalid."""
+    if not node_name or not node_name.strip():
+        raise ValueError("Node name cannot be empty")
+    node_name = node_name.strip()
+    if not _VALID_NODE_NAME_RE.match(node_name):
+        raise ValueError(
+            "Invalid node name: must be 1-256 characters using only "
+            "alphanumerics, dots, dashes, underscores, colons, and plus signs"
+        )
+    return node_name
+
 
 def _safe_filename(node_name):
     """Convert a node name to a safe filename component."""
     # Replace any non-alphanumeric/dash/underscore chars with underscore
-    return re.sub(r"[^a-zA-Z0-9_-]", "_", node_name)
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", node_name)
+    # Truncate to avoid exceeding filesystem name limits (255 bytes)
+    # _FILE_PREFIX is 12 chars, ".conf" is 5 chars, so allow 238 for the middle
+    return safe[:238]
 
 
 def _config_path(node_name):
@@ -33,8 +53,71 @@ def _config_path(node_name):
 
 
 def _escape_spa_json(value):
-    """Escape a string value for SPA-JSON (WirePlumber config format)."""
-    return value.replace("\\", "\\\\").replace('"', '\\"')
+    """Escape a string value for SPA-JSON (WirePlumber config format).
+
+    Handles backslashes, double quotes, and control characters that could
+    break the SPA-JSON structure.
+    """
+    value = value.replace("\\", "\\\\")
+    value = value.replace('"', '\\"')
+    # Strip any control characters (newlines, tabs, etc.) that could inject
+    # new lines or directives into the config file
+    value = re.sub(r"[\x00-\x1f\x7f]", "", value)
+    return value
+
+
+def _safe_write(path, content):
+    """Write content to a file safely, refusing to follow symlinks.
+
+    Uses O_NOFOLLOW to prevent symlink attacks when running as root.
+    Sets explicit file permissions (0644).
+    """
+    # Refuse to write if path is a symlink
+    if os.path.lexists(path) and os.path.islink(path):
+        raise RuntimeError(
+            f"Refusing to write to {path}: path is a symlink"
+        )
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    # O_NOFOLLOW prevents following symlinks on the final path component
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+
+    try:
+        fd = os.open(path, flags, 0o644)
+    except OSError as e:
+        raise RuntimeError(f"Cannot open {path}: {e}")
+
+    try:
+        os.write(fd, content.encode("utf-8"))
+    except OSError as e:
+        raise RuntimeError(f"Cannot write to {path}: {e}")
+    finally:
+        os.close(fd)
+
+
+def _safe_remove(path):
+    """Remove a file safely, refusing to follow symlinks.
+
+    Checks that the path is a regular file (not a symlink or special file)
+    before removing, to prevent deleting unintended targets.
+    """
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        raise ValueError(f"File not found: {path}")
+    except OSError as e:
+        raise RuntimeError(f"Cannot stat {path}: {e}")
+
+    if stat.S_ISLNK(st.st_mode):
+        raise RuntimeError(f"Refusing to remove {path}: path is a symlink")
+    if not stat.S_ISREG(st.st_mode):
+        raise RuntimeError(f"Refusing to remove {path}: not a regular file")
+
+    try:
+        os.remove(path)
+    except OSError as e:
+        raise RuntimeError(f"Cannot remove {path}: {e}")
 
 
 def generate_rule(node_name, new_description):
@@ -70,6 +153,8 @@ def rename_node(node_name, new_description):
     if os.geteuid() != 0:
         raise PermissionError("Must be run as root")
 
+    node_name = validate_node_name(node_name)
+
     log.info("Creating WirePlumber rename rule for '%s' -> '%s'",
              node_name, new_description)
 
@@ -78,11 +163,7 @@ def rename_node(node_name, new_description):
     content = generate_rule(node_name, new_description)
     path = _config_path(node_name)
 
-    try:
-        with open(path, "w") as f:
-            f.write(content)
-    except OSError as e:
-        raise RuntimeError(f"Cannot write WirePlumber config {path}: {e}")
+    _safe_write(path, content)
 
     log.info("WirePlumber rule written to %s", path)
 
@@ -92,16 +173,11 @@ def revert_node(node_name):
     if os.geteuid() != 0:
         raise PermissionError("Must be run as root")
 
+    node_name = validate_node_name(node_name)
     path = _config_path(node_name)
     log.info("Removing WirePlumber rename rule for '%s'", node_name)
 
-    if not os.path.exists(path):
-        raise ValueError(f"No rename rule found for node '{node_name}'")
-
-    try:
-        os.remove(path)
-    except OSError as e:
-        raise RuntimeError(f"Cannot remove WirePlumber config {path}: {e}")
+    _safe_remove(path)
 
     log.info("WirePlumber rule removed: %s", path)
 
@@ -144,6 +220,12 @@ def get_all_renamed():
             continue
 
         filepath = os.path.join(WIREPLUMBER_DIR, filename)
+
+        # Skip symlinks — only read regular files
+        if os.path.islink(filepath):
+            log.warning("Skipping symlink: %s", filepath)
+            continue
+
         node_name = None
         description = None
         try:
@@ -170,14 +252,27 @@ def get_all_renamed():
 def revert_all():
     """Remove all portname WirePlumber rename rules. Must be run as root.
 
+    Attempts to revert all rules, continuing past individual failures.
     Returns a list of reverted node names.
     """
     if os.geteuid() != 0:
         raise PermissionError("Must be run as root")
 
     reverted = []
+    errors = []
     for node_name, _desc in get_all_renamed():
-        revert_node(node_name)
-        reverted.append(node_name)
+        try:
+            revert_node(node_name)
+            reverted.append(node_name)
+        except (ValueError, RuntimeError) as e:
+            log.error("Failed to revert USB node '%s': %s", node_name, e)
+            errors.append(f"{node_name}: {e}")
+
+    if errors and not reverted:
+        raise RuntimeError(
+            f"Failed to revert USB renames: {'; '.join(errors)}"
+        )
+    elif errors:
+        log.warning("Some USB reverts failed: %s", "; ".join(errors))
 
     return reverted

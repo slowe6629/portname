@@ -180,6 +180,165 @@ class TestGetAllRenamed(unittest.TestCase):
         self.assertEqual(wp.get_all_renamed(), [])
 
 
+class TestValidateNodeName(unittest.TestCase):
+    def test_valid_node_name(self):
+        self.assertEqual(
+            wp.validate_node_name("alsa_output.usb-Device-00.analog-stereo"),
+            "alsa_output.usb-Device-00.analog-stereo",
+        )
+
+    def test_empty_raises(self):
+        with self.assertRaises(ValueError):
+            wp.validate_node_name("")
+
+    def test_whitespace_only_raises(self):
+        with self.assertRaises(ValueError):
+            wp.validate_node_name("   ")
+
+    def test_newline_rejected(self):
+        with self.assertRaises(ValueError):
+            wp.validate_node_name("node\ninjection")
+
+    def test_slash_rejected(self):
+        with self.assertRaises(ValueError):
+            wp.validate_node_name("../../etc/passwd")
+
+    def test_space_rejected(self):
+        with self.assertRaises(ValueError):
+            wp.validate_node_name("node with spaces")
+
+    def test_too_long_rejected(self):
+        with self.assertRaises(ValueError):
+            wp.validate_node_name("a" * 257)
+
+    def test_max_length_ok(self):
+        name = "a" * 256
+        self.assertEqual(wp.validate_node_name(name), name)
+
+    def test_colon_and_plus_allowed(self):
+        self.assertEqual(wp.validate_node_name("node:name+extra"), "node:name+extra")
+
+    def test_strips_whitespace(self):
+        self.assertEqual(
+            wp.validate_node_name("  alsa_output.usb-Test-00  "),
+            "alsa_output.usb-Test-00",
+        )
+
+
+class TestEscapeSpaJson(unittest.TestCase):
+    def test_strips_newlines(self):
+        result = wp._escape_spa_json('before\nafter')
+        self.assertNotIn("\n", result)
+        self.assertEqual(result, "beforeafter")
+
+    def test_strips_carriage_return(self):
+        result = wp._escape_spa_json('before\rafter')
+        self.assertNotIn("\r", result)
+
+    def test_strips_null_bytes(self):
+        result = wp._escape_spa_json('before\x00after')
+        self.assertNotIn("\x00", result)
+
+    def test_strips_tabs(self):
+        result = wp._escape_spa_json('before\tafter')
+        self.assertNotIn("\t", result)
+
+    def test_escapes_quotes_and_backslashes(self):
+        result = wp._escape_spa_json('say "hello" \\ world')
+        self.assertEqual(result, 'say \\"hello\\" \\\\ world')
+
+
+class TestSafeWrite(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_writes_file(self):
+        path = os.path.join(self.tmpdir, "test.conf")
+        wp._safe_write(path, "hello world")
+        with open(path) as f:
+            self.assertEqual(f.read(), "hello world")
+
+    def test_sets_permissions(self):
+        path = os.path.join(self.tmpdir, "test.conf")
+        wp._safe_write(path, "content")
+        mode = os.stat(path).st_mode & 0o777
+        self.assertEqual(mode, 0o644)
+
+    def test_refuses_symlink(self):
+        target = os.path.join(self.tmpdir, "target.txt")
+        with open(target, "w") as f:
+            f.write("original")
+        link = os.path.join(self.tmpdir, "link.conf")
+        os.symlink(target, link)
+
+        with self.assertRaises(RuntimeError) as ctx:
+            wp._safe_write(link, "overwritten")
+        self.assertIn("symlink", str(ctx.exception))
+        # Target file should be untouched
+        with open(target) as f:
+            self.assertEqual(f.read(), "original")
+
+
+class TestSafeRemove(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_removes_regular_file(self):
+        path = os.path.join(self.tmpdir, "test.conf")
+        with open(path, "w") as f:
+            f.write("content")
+        wp._safe_remove(path)
+        self.assertFalse(os.path.exists(path))
+
+    def test_refuses_symlink(self):
+        target = os.path.join(self.tmpdir, "target.txt")
+        with open(target, "w") as f:
+            f.write("important")
+        link = os.path.join(self.tmpdir, "link.conf")
+        os.symlink(target, link)
+
+        with self.assertRaises(RuntimeError) as ctx:
+            wp._safe_remove(link)
+        self.assertIn("symlink", str(ctx.exception))
+        # Target should still exist
+        self.assertTrue(os.path.exists(target))
+
+    def test_raises_on_nonexistent(self):
+        with self.assertRaises(ValueError):
+            wp._safe_remove(os.path.join(self.tmpdir, "nope"))
+
+
+class TestGetAllRenamedSkipsSymlinks(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self._orig_dir = wp.WIREPLUMBER_DIR
+        wp.WIREPLUMBER_DIR = self.tmpdir
+
+    def tearDown(self):
+        wp.WIREPLUMBER_DIR = self._orig_dir
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_skips_symlinked_config_files(self):
+        # Create a real config file
+        real_path = os.path.join(self.tmpdir, "real.conf")
+        with open(real_path, "w") as f:
+            f.write('node.name = "real"\nnode.description = "Real"')
+
+        # Create a symlink with our prefix
+        link_path = os.path.join(self.tmpdir, "90-portname-evil.conf")
+        os.symlink(real_path, link_path)
+
+        renamed = wp.get_all_renamed()
+        # Symlink should be skipped
+        self.assertEqual(renamed, [])
+
+
 class TestRevertAll(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -205,6 +364,29 @@ class TestRevertAll(unittest.TestCase):
     def test_revert_all_empty(self, mock_euid):
         reverted = wp.revert_all()
         self.assertEqual(reverted, [])
+
+    @patch("os.geteuid", return_value=0)
+    def test_continues_past_failures(self, mock_euid):
+        """If one revert fails, the rest should still be attempted."""
+        wp.rename_node("alsa_output.usb-A-00", "Device A")
+        wp.rename_node("alsa_output.usb-B-00", "Device B")
+
+        # Make A's config a symlink (will fail _safe_remove) but B is fine
+        a_path = wp._config_path("alsa_output.usb-A-00")
+        b_path = wp._config_path("alsa_output.usb-B-00")
+
+        # Replace A's config with a symlink to a temp file
+        dummy = os.path.join(self.tmpdir, "dummy")
+        with open(dummy, "w") as f:
+            f.write("x")
+        os.remove(a_path)
+        os.symlink(dummy, a_path)
+
+        # revert_all should succeed for B even though A fails
+        reverted = wp.revert_all()
+        self.assertIn("alsa_output.usb-B-00", reverted)
+        self.assertNotIn("alsa_output.usb-A-00", reverted)
+        self.assertFalse(os.path.exists(b_path))
 
     @patch("os.geteuid", return_value=1000)
     def test_requires_root(self, mock_euid):

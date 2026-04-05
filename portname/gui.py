@@ -346,25 +346,57 @@ class PortNameWindow(Gtk.Window):
             self._show_error(f"Rename failed: {self._extract_error(result.stderr)}")
 
     def _do_usb_rename(self, node_names, new_name):
-        """Rename USB audio nodes via WirePlumber rules."""
+        """Rename USB audio nodes via WirePlumber rules.
+
+        Continues past individual failures so partial state is avoided
+        where possible, and reports all errors at once.
+        """
+        errors = []
+        succeeded = 0
         for nn in node_names:
             result = run_as_root(["rename", "usb", new_name, "--node", nn])
-            if result.returncode != 0:
-                self._show_error(f"Rename failed: {self._extract_error(result.stderr)}")
-                return
-        self._show_info(f"Renamed to '{new_name}'. Refreshing...")
-        self._wait_for_pipewire_and_refresh()
+            if result.returncode == 0:
+                succeeded += 1
+            else:
+                errors.append(self._extract_error(result.stderr))
+
+        if errors and not succeeded:
+            self._show_error(f"Rename failed: {'; '.join(errors)}")
+        elif errors:
+            self._show_error(
+                f"Renamed {succeeded} of {len(node_names)} nodes. "
+                f"Errors: {'; '.join(errors)}"
+            )
+            self._wait_for_pipewire_and_refresh()
+        else:
+            self._show_info(f"Renamed to '{new_name}'. Refreshing...")
+            self._wait_for_pipewire_and_refresh()
 
     def _do_usb_revert(self, node_names):
-        """Revert USB audio node renames."""
+        """Revert USB audio node renames.
+
+        Continues past individual failures to revert as many nodes as possible.
+        """
+        errors = []
+        succeeded = 0
         for nn in node_names:
             if wireplumber.is_node_renamed(nn):
                 result = run_as_root(["revert", "--node", nn])
-                if result.returncode != 0:
-                    self._show_error(f"Revert failed: {self._extract_error(result.stderr)}")
-                    return
-        self._show_info("Reverted to original name. Refreshing...")
-        self._wait_for_pipewire_and_refresh()
+                if result.returncode == 0:
+                    succeeded += 1
+                else:
+                    errors.append(self._extract_error(result.stderr))
+
+        if errors and not succeeded:
+            self._show_error(f"Revert failed: {'; '.join(errors)}")
+        elif errors:
+            self._show_error(
+                f"Reverted {succeeded} node(s), but some failed: {'; '.join(errors)}"
+            )
+            self._wait_for_pipewire_and_refresh()
+        else:
+            self._show_info("Reverted to original name. Refreshing...")
+            self._wait_for_pipewire_and_refresh()
 
     def _do_revert(self, route_name):
         result = run_as_root(["revert", route_name])
