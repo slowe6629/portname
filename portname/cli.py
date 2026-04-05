@@ -10,6 +10,7 @@ from portname.core import (
     get_devices, is_renamed, get_original_description,
     rename_port, revert_port, revert_all, repair_distrib_diversions,
 )
+from portname import wireplumber
 from portname.automute import get_auto_mute_status, set_auto_mute, get_cards_with_auto_mute
 from portname.privilege import ensure_root_or_exit
 
@@ -22,7 +23,13 @@ def cmd_list(args):
         return
 
     for dev in devices:
-        print(f"\n{dev['device_description']} (card {dev['alsa_card']})")
+        bus_tag = " [USB]" if dev.get("device_bus") == "usb" else ""
+        print(f"\n{dev['device_description']} (card {dev['alsa_card']}){bus_tag}")
+
+        # Show node names for USB devices (needed for rename commands)
+        if dev.get("device_bus") == "usb" and dev.get("node_names"):
+            for nn in dev["node_names"]:
+                print(f"  node: {nn}")
 
         outputs = [r for r in dev["routes"] if r["direction"] == "Output"]
         inputs = [r for r in dev["routes"] if r["direction"] == "Input"]
@@ -33,8 +40,17 @@ def cmd_list(args):
             print(f"  {label}:")
             for r in routes:
                 tags = []
-                if is_renamed(r["name"]):
+                method = r.get("rename_method", "path_file")
+                if method == "path_file" and is_renamed(r["name"]):
                     tags.append("renamed")
+                elif method == "wireplumber":
+                    # Check each node for WirePlumber renames
+                    for nn in dev.get("node_names", []):
+                        if wireplumber.is_node_renamed(nn):
+                            tags.append("renamed")
+                            break
+                    if "renamed" not in tags:
+                        tags.append("usb")
                 if r["available"] == "yes":
                     tags.append("available")
                 tag_str = f"  [{', '.join(tags)}]" if tags else ""
@@ -45,8 +61,13 @@ def cmd_rename(args):
     """Rename an audio port."""
     ensure_root_or_exit()
     try:
-        rename_port(args.route, args.name)
-        print(f"Renamed '{args.route}' to '{args.name}'")
+        if args.node:
+            # USB rename via WirePlumber
+            rename_port(args.route, args.name, method="wireplumber", node_name=args.node)
+            print(f"Renamed USB node '{args.node}' to '{args.name}'")
+        else:
+            rename_port(args.route, args.name)
+            print(f"Renamed '{args.route}' to '{args.name}'")
         print("Restarting PipeWire... done.")
     except (FileNotFoundError, ValueError, RuntimeError, PermissionError) as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -65,12 +86,17 @@ def cmd_revert(args):
                 print("Restarting PipeWire... done.")
             else:
                 print("No renamed ports to revert.")
+        elif args.node:
+            # USB revert via WirePlumber
+            revert_port(None, method="wireplumber", node_name=args.node)
+            print(f"Reverted USB node '{args.node}' to original name")
+            print("Restarting PipeWire... done.")
         elif args.route:
             revert_port(args.route)
             print(f"Reverted '{args.route}' to original name")
             print("Restarting PipeWire... done.")
         else:
-            print("Error: specify a route name or use --all", file=sys.stderr)
+            print("Error: specify a route name, --node, or --all", file=sys.stderr)
             sys.exit(1)
     except (FileNotFoundError, ValueError) as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -155,11 +181,17 @@ def main():
     rename_p = subparsers.add_parser("rename", help="Rename an audio port (requires sudo)")
     rename_p.add_argument("route", help="Route name (e.g. analog-output-lineout)")
     rename_p.add_argument("name", help="New display name")
+    rename_p.add_argument(
+        "--node", "-n", help="PipeWire node name for USB devices (use 'portname list' to find it)"
+    )
 
     # revert
     revert_p = subparsers.add_parser("revert", help="Revert a renamed port (requires sudo)")
     revert_p.add_argument("route", nargs="?", help="Route name to revert")
     revert_p.add_argument("--all", action="store_true", help="Revert all renamed ports")
+    revert_p.add_argument(
+        "--node", "-n", help="PipeWire node name for USB device to revert"
+    )
 
     # auto-mute
     am_p = subparsers.add_parser("auto-mute", help="Toggle Auto-Mute Mode")

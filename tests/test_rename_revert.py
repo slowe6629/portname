@@ -163,10 +163,11 @@ class TestRevertAll(unittest.TestCase):
         import shutil
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
+    @patch("portname.core.wireplumber.revert_all", return_value=[])
     @patch("portname.core.revert_port")
     @patch("portname.core.subprocess.run")
     @patch("os.geteuid", return_value=0)
-    def test_revert_all_finds_diverted_ports(self, mock_euid, mock_run, mock_revert):
+    def test_revert_all_finds_diverted_ports(self, mock_euid, mock_run, mock_revert, mock_wp_revert):
         divert_output = (
             f"local diversion of {self.tmpdir}/analog-output-lineout.conf "
             f"to {self.tmpdir}/analog-output-lineout.conf.orig\n"
@@ -180,9 +181,10 @@ class TestRevertAll(unittest.TestCase):
         self.assertEqual(reverted, ["analog-output-lineout", "analog-input-rear-mic"])
         self.assertEqual(mock_revert.call_count, 2)
 
+    @patch("portname.core.wireplumber.revert_all", return_value=[])
     @patch("portname.core.subprocess.run")
     @patch("os.geteuid", return_value=0)
-    def test_revert_all_empty(self, mock_euid, mock_run):
+    def test_revert_all_empty(self, mock_euid, mock_run, mock_wp_revert):
         mock_run.return_value = MagicMock(stdout="", returncode=0)
         reverted = core.revert_all()
         self.assertEqual(reverted, [])

@@ -67,6 +67,7 @@ SAMPLE_PW_DUMP = [
                 "device.api": "alsa",
                 "device.name": "alsa_card.pci-0000_2d_00.4",
                 "device.description": "Starship/Matisse HD Audio Controller",
+                "device.bus": "pci",
                 "alsa.card": 1,
                 "alsa.card_name": "HD-Audio Generic",
             },
@@ -96,7 +97,77 @@ SAMPLE_PW_DUMP = [
                 ],
             },
         },
-    }
+    },
+    # PipeWire node for the PCI device
+    {
+        "id": 48,
+        "type": "PipeWire:Interface:Node",
+        "info": {
+            "props": {
+                "node.name": "alsa_output.pci-0000_2d_00.4.analog-stereo",
+                "device.name": "alsa_card.pci-0000_2d_00.4",
+                "media.class": "Audio/Sink",
+            },
+        },
+    },
+]
+
+SAMPLE_USB_PW_DUMP = SAMPLE_PW_DUMP + [
+    {
+        "id": 60,
+        "type": "PipeWire:Interface:Device",
+        "info": {
+            "props": {
+                "device.api": "alsa",
+                "device.name": "alsa_card.usb-Blue_Yeti-00",
+                "device.description": "Blue Yeti",
+                "device.bus": "usb",
+                "alsa.card": 2,
+                "alsa.card_name": "Blue Yeti",
+            },
+            "params": {
+                "EnumRoute": [
+                    {
+                        "index": 0,
+                        "direction": "Output",
+                        "name": "Speaker",
+                        "description": "Speaker",
+                        "available": "unknown",
+                    },
+                    {
+                        "index": 1,
+                        "direction": "Input",
+                        "name": "Mic",
+                        "description": "Microphone",
+                        "available": "yes",
+                    },
+                ],
+            },
+        },
+    },
+    # PipeWire nodes for the USB device
+    {
+        "id": 61,
+        "type": "PipeWire:Interface:Node",
+        "info": {
+            "props": {
+                "node.name": "alsa_output.usb-Blue_Yeti-00.analog-stereo",
+                "device.name": "alsa_card.usb-Blue_Yeti-00",
+                "media.class": "Audio/Sink",
+            },
+        },
+    },
+    {
+        "id": 62,
+        "type": "PipeWire:Interface:Node",
+        "info": {
+            "props": {
+                "node.name": "alsa_input.usb-Blue_Yeti-00.analog-stereo",
+                "device.name": "alsa_card.usb-Blue_Yeti-00",
+                "media.class": "Audio/Source",
+            },
+        },
+    },
 ]
 
 
@@ -221,9 +292,40 @@ class TestGetDevices(unittest.TestCase):
         dev = devices[0]
         self.assertEqual(dev["device_description"], "Starship/Matisse HD Audio Controller")
         self.assertEqual(dev["alsa_card"], "1")
+        self.assertEqual(dev["device_bus"], "pci")
         self.assertEqual(len(dev["routes"]), 3)
         self.assertEqual(dev["routes"][0]["name"], "analog-output-lineout")
         self.assertEqual(dev["routes"][0]["direction"], "Output")
+        self.assertEqual(dev["routes"][0]["rename_method"], "path_file")
+
+    @patch("portname.core.os.path.exists")
+    @patch("portname.core.shutil.which", return_value="/usr/bin/pw-dump")
+    @patch("portname.core.subprocess.run")
+    def test_parses_usb_devices(self, mock_run, mock_which, mock_exists):
+        mock_run.return_value = MagicMock(
+            stdout=json.dumps(SAMPLE_USB_PW_DUMP),
+            returncode=0,
+        )
+        # Path files exist for PCI routes but not USB routes
+        def exists_side_effect(path):
+            return "analog-output" in path or "analog-input" in path
+        mock_exists.side_effect = exists_side_effect
+
+        devices = get_devices()
+
+        # Should find both PCI and USB devices
+        self.assertEqual(len(devices), 2)
+
+        usb_dev = [d for d in devices if d["device_bus"] == "usb"][0]
+        self.assertEqual(usb_dev["device_description"], "Blue Yeti")
+        self.assertEqual(usb_dev["device_bus"], "usb")
+        self.assertEqual(len(usb_dev["routes"]), 2)
+        # USB routes without path files should use wireplumber method
+        self.assertEqual(usb_dev["routes"][0]["rename_method"], "wireplumber")
+        self.assertEqual(usb_dev["routes"][1]["rename_method"], "wireplumber")
+        # Should have node names
+        self.assertIn("alsa_output.usb-Blue_Yeti-00.analog-stereo", usb_dev["node_names"])
+        self.assertIn("alsa_input.usb-Blue_Yeti-00.analog-stereo", usb_dev["node_names"])
 
     @patch("portname.core.shutil.which", return_value=None)
     def test_raises_when_pw_dump_missing(self, mock_which):

@@ -10,6 +10,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib, Pango  # noqa: E402
 
 from portname.core import get_devices, is_renamed, get_original_description, validate_port_name
+from portname import wireplumber
 from portname.automute import get_auto_mute_status, set_auto_mute
 from portname.privilege import run_as_root
 
@@ -77,9 +78,10 @@ class PortNameWindow(Gtk.Window):
         header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         header_box.set_margin_top(8)
 
+        bus_tag = "  <small>[USB]</small>" if dev.get("device_bus") == "usb" else ""
         label = Gtk.Label()
         label.set_markup(f"<b>{GLib.markup_escape_text(dev['device_description'])}</b>  "
-                         f"<small>(card {dev['alsa_card']})</small>")
+                         f"<small>(card {dev['alsa_card']})</small>{bus_tag}")
         label.set_halign(Gtk.Align.START)
         header_box.pack_start(label, True, True, 0)
 
@@ -107,12 +109,12 @@ class PortNameWindow(Gtk.Window):
 
         for direction_label, routes in [("Output", outputs), ("Input", inputs)]:
             for route in routes:
-                row = self._create_route_row(route, direction_label)
+                row = self._create_route_row(route, direction_label, dev)
                 listbox.add(row)
 
         self.main_box.pack_start(frame, False, False, 0)
 
-    def _create_route_row(self, route, direction_label):
+    def _create_route_row(self, route, direction_label, dev):
         row = Gtk.ListBoxRow()
         row.set_activatable(False)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
@@ -138,8 +140,16 @@ class PortNameWindow(Gtk.Window):
         name_label.set_max_width_chars(30)
         hbox.pack_start(name_label, True, True, 0)
 
+        # Determine rename state based on method
+        method = route.get("rename_method", "path_file")
+        if method == "wireplumber":
+            # For USB routes, check WirePlumber rename status on any node
+            node_names = dev.get("node_names", [])
+            renamed = any(wireplumber.is_node_renamed(nn) for nn in node_names)
+        else:
+            renamed = is_renamed(route["name"])
+
         # Status badges
-        renamed = is_renamed(route["name"])
         badge_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
 
         if renamed:
@@ -156,22 +166,25 @@ class PortNameWindow(Gtk.Window):
 
         hbox.pack_start(badge_box, False, False, 0)
 
-        # Action buttons
+        # Action buttons — pass device info for USB rename context
         rename_btn = Gtk.Button(label="Rename")
-        rename_btn.connect("clicked", self._on_rename_clicked, route)
+        rename_btn.connect("clicked", self._on_rename_clicked, route, dev)
         hbox.pack_end(rename_btn, False, False, 0)
 
         if renamed:
             revert_btn = Gtk.Button(label="Revert")
-            revert_btn.connect("clicked", self._on_revert_clicked, route)
+            revert_btn.connect("clicked", self._on_revert_clicked, route, dev)
             hbox.pack_end(revert_btn, False, False, 0)
 
         row.add(hbox)
         return row
 
-    def _on_rename_clicked(self, button, route):
+    def _on_rename_clicked(self, button, route, dev=None):
+        method = route.get("rename_method", "path_file")
+        is_usb = method == "wireplumber"
+
         dialog = Gtk.Dialog(
-            title="Rename Audio Port",
+            title="Rename USB Audio Device" if is_usb else "Rename Audio Port",
             parent=self,
             flags=Gtk.DialogFlags.MODAL | Gtk.DialogFlags.DESTROY_WITH_PARENT,
         )
@@ -187,7 +200,12 @@ class PortNameWindow(Gtk.Window):
         content.set_margin_bottom(12)
 
         label = Gtk.Label()
-        label.set_markup(f"Rename <b>{GLib.markup_escape_text(route['name'])}</b>:")
+        if is_usb:
+            label.set_markup(
+                f"Rename USB device <b>{GLib.markup_escape_text(dev.get('device_description', route['name']))}</b>:"
+            )
+        else:
+            label.set_markup(f"Rename <b>{GLib.markup_escape_text(route['name'])}</b>:")
         label.set_halign(Gtk.Align.START)
         content.add(label)
 
@@ -207,22 +225,45 @@ class PortNameWindow(Gtk.Window):
             except ValueError as e:
                 self._show_error(str(e))
                 return
-            self._do_rename(route["name"], new_name)
+            if is_usb and dev:
+                node_names = dev.get("node_names", [])
+                if node_names:
+                    self._do_usb_rename(node_names, new_name)
+                else:
+                    self._show_error("No PipeWire node found for this USB device.")
+            else:
+                self._do_rename(route["name"], new_name)
 
-    def _on_revert_clicked(self, button, route):
-        orig = get_original_description(route["name"]) or "original"
-        dialog = Gtk.MessageDialog(
-            parent=self,
-            flags=Gtk.DialogFlags.MODAL,
-            type=Gtk.MessageType.QUESTION,
-            buttons=Gtk.ButtonsType.YES_NO,
-            message_format=f"Revert '{route['description']}' to its original name ({orig})?",
-        )
-        response = dialog.run()
-        dialog.destroy()
+    def _on_revert_clicked(self, button, route, dev=None):
+        method = route.get("rename_method", "path_file")
 
-        if response == Gtk.ResponseType.YES:
-            self._do_revert(route["name"])
+        if method == "wireplumber" and dev:
+            node_names = dev.get("node_names", [])
+            dialog = Gtk.MessageDialog(
+                parent=self,
+                flags=Gtk.DialogFlags.MODAL,
+                type=Gtk.MessageType.QUESTION,
+                buttons=Gtk.ButtonsType.YES_NO,
+                message_format=f"Revert USB device '{route['description']}' to its original name?",
+            )
+            response = dialog.run()
+            dialog.destroy()
+            if response == Gtk.ResponseType.YES:
+                self._do_usb_revert(node_names)
+        else:
+            orig = get_original_description(route["name"]) or "original"
+            dialog = Gtk.MessageDialog(
+                parent=self,
+                flags=Gtk.DialogFlags.MODAL,
+                type=Gtk.MessageType.QUESTION,
+                buttons=Gtk.ButtonsType.YES_NO,
+                message_format=f"Revert '{route['description']}' to its original name ({orig})?",
+            )
+            response = dialog.run()
+            dialog.destroy()
+
+            if response == Gtk.ResponseType.YES:
+                self._do_revert(route["name"])
 
     def _on_auto_mute_toggle(self, button, card):
         current = get_auto_mute_status(card)
@@ -303,6 +344,27 @@ class PortNameWindow(Gtk.Window):
             self._wait_for_pipewire_and_refresh()
         else:
             self._show_error(f"Rename failed: {self._extract_error(result.stderr)}")
+
+    def _do_usb_rename(self, node_names, new_name):
+        """Rename USB audio nodes via WirePlumber rules."""
+        for nn in node_names:
+            result = run_as_root(["rename", "usb", new_name, "--node", nn])
+            if result.returncode != 0:
+                self._show_error(f"Rename failed: {self._extract_error(result.stderr)}")
+                return
+        self._show_info(f"Renamed to '{new_name}'. Refreshing...")
+        self._wait_for_pipewire_and_refresh()
+
+    def _do_usb_revert(self, node_names):
+        """Revert USB audio node renames."""
+        for nn in node_names:
+            if wireplumber.is_node_renamed(nn):
+                result = run_as_root(["revert", "--node", nn])
+                if result.returncode != 0:
+                    self._show_error(f"Revert failed: {self._extract_error(result.stderr)}")
+                    return
+        self._show_info("Reverted to original name. Refreshing...")
+        self._wait_for_pipewire_and_refresh()
 
     def _do_revert(self, route_name):
         result = run_as_root(["revert", route_name])
