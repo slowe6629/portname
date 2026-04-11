@@ -29,11 +29,8 @@ jobs:
         run: python -m unittest discover -v tests/
 
   integration:
-    name: Integration — real alsa-card-profile paths (${{ matrix.distro }})
+    name: Integration — real alsa-card-profile paths (ubuntu)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        distro: [ubuntu]   # extend to fedora/arch once Docker path is validated (see TESTING.md)
 
     steps:
       - uses: actions/checkout@v4
@@ -63,3 +60,25 @@ jobs:
           sudo portname check 2>&1 | grep -qiE "intact|pipewire|pw-dump|error" \
             && echo "PASS: check command exited cleanly" \
             || (echo "FAIL: unexpected output"; exit 1)
+
+  docker-integration:
+    name: Docker end-to-end — ${{ matrix.distro }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: arch
+            image: archlinux:latest
+          - distro: fedora
+            image: fedora:latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run ${{ matrix.distro }} end-to-end test
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/portname" \
+            ${{ matrix.image }} \
+            bash /portname/tests/docker/test_${{ matrix.distro }}.sh
