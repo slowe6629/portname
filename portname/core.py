@@ -537,7 +537,14 @@ def _get_real_user():
 
 
 def restart_pipewire():
-    """Restart PipeWire services. Runs as the real user if we're root via sudo/pkexec."""
+    """Restart PipeWire services. Runs as the real user if we're root via sudo/pkexec.
+
+    Set PORTNAME_SKIP_RESTART=1 to skip the systemctl call entirely (useful in
+    containers or test environments where PipeWire is not running).
+    """
+    if os.environ.get("PORTNAME_SKIP_RESTART") == "1":
+        log.info("PORTNAME_SKIP_RESTART=1 — skipping PipeWire restart")
+        return
     log.info("Restarting PipeWire services")
     try:
         if os.geteuid() == 0:

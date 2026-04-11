@@ -52,15 +52,13 @@ The idea is a self-contained shell script (or a second CI job) that:
 - Docker-in-Docker on GitHub Actions works but requires `--privileged` or
   `docker buildx` setup; the added complexity wasn't worth it before the
   `check` command even existed.
-- PipeWire is not running inside the container, so `restart_pipewire()` will
-  fail. The test script would need to either mock that call (e.g. via
-  `PORTNAME_SKIP_RESTART=1` env var) or patch it with a no-op wrapper — a small
-  code change worth doing when this test is added.
+- PipeWire is not running inside the container, so the test script should set
+  `PORTNAME_SKIP_RESTART=1` to bypass the `systemctl` call in `restart_pipewire()`.
+  This env var is already supported.
 
 ### Next steps to implement this
 
-1. Add `PORTNAME_SKIP_RESTART` env-var support to `core.restart_pipewire()` so
-   the Docker test can bypass the systemctl call.
+1. ~~Add `PORTNAME_SKIP_RESTART` env-var support to `core.restart_pipewire()`~~ — done.
 2. Write `tests/docker/test_arch.sh` and `tests/docker/test_fedora.sh`.
 3. Add a `docker` job to `.github/workflows/ci.yml` that builds the container
    and runs the scripts.
