@@ -21,6 +21,9 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio",
 ]
 
+[tool.setuptools.packages.find]
+include = ["portname*"]
+
 [project.scripts]
 portname = "portname.cli:main"
 
