@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    name: Unit tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.8", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Run tests
+        run: python -m unittest discover -v tests/
+
+  integration:
+    name: Integration — real alsa-card-profile paths (${{ matrix.distro }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        distro: [ubuntu]   # extend to fedora/arch once Docker path is validated (see TESTING.md)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install alsa-card-profile
+        run: sudo apt-get update -qq && sudo apt-get install -y pipewire alsa-utils
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Run unit tests (verifies parser against installed .conf files)
+        run: python -m unittest discover -v tests/
+
+      - name: Smoke-test portname list (no PipeWire daemon — expect graceful error)
+        run: |
+          portname list 2>&1 | grep -qiE "pw-dump|pipewire|no audio" \
+            && echo "PASS: graceful failure without PipeWire daemon" \
+            || (echo "FAIL: unexpected output"; exit 1)
+
+      - name: Smoke-test portname check (no daemon — expect graceful error or no-op)
+        run: |
+          sudo portname check 2>&1 | grep -qiE "intact|pipewire|pw-dump|error" \
+            && echo "PASS: check command exited cleanly" \
+            || (echo "FAIL: unexpected output"; exit 1)

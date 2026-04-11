@@ -27,7 +27,7 @@ _VALID_NAME_RE = re.compile(r"^[^\x00-\x1f]{1,64}$")
 class DpkgDivertBackend:
     """File-protection backend using dpkg-divert (Debian/Ubuntu only)."""
 
-    def add(self, path):
+    def add(self, path, name=None):
         """Register a diversion: atomically move path -> path.orig."""
         try:
             subprocess.run(
@@ -90,7 +90,7 @@ class NativeBackend:
             json.dump(state, f, indent=2)
         os.replace(tmp, self._state_file)
 
-    def add(self, path):
+    def add(self, path, name=None):
         """Back up path -> path.orig and record the diversion."""
         backup = path + ".orig"
         try:
@@ -98,8 +98,19 @@ class NativeBackend:
         except OSError as e:
             raise RuntimeError(f"Failed to back up {path}: {e}")
         state = self._load()
-        state["diversions"][path] = {"backup": backup}
+        state["diversions"][path] = {"backup": backup, "name": name}
         self._save(state)
+
+    def update_name(self, path, name):
+        """Update the stored custom name for an already-diverted path."""
+        state = self._load()
+        if path in state["diversions"]:
+            state["diversions"][path]["name"] = name
+            self._save(state)
+
+    def get_custom_name(self, path):
+        """Return the stored custom name for a diverted path, or None."""
+        return self._load()["diversions"].get(path, {}).get("name")
 
     def remove(self, path):
         """Restore path.orig -> path and remove the diversion record."""
@@ -318,9 +329,12 @@ def rename_port(route_name, new_name):
     log.debug("Path file: %s", path)
 
     # Back up the original file if not already done
+    backend = _get_divert_backend()
     if not is_renamed(route_name):
         log.debug("Backing up %s", path)
-        _get_divert_backend().add(path)
+        backend.add(path, new_name)
+    elif isinstance(backend, NativeBackend):
+        backend.update_name(path, new_name)
 
     # Read from .orig, write modified version to the main path
     content = _modify_description(path + ".orig", new_name)
@@ -443,6 +457,66 @@ def repair_distrib_diversions():
         restart_pipewire()
 
     return repaired
+
+
+def check_and_reapply():
+    """Detect renames clobbered by a package upgrade and re-apply them.
+
+    On Arch, Fedora, and similar distros there is no package-manager hook to
+    protect modified .conf files, so an upgrade of alsa-card-profile will
+    silently overwrite them.  This function compares the description in each
+    tracked .conf against the stored custom name; when they differ the custom
+    name is written back and PipeWire is restarted.
+
+    Returns a list of (route_name, custom_name) tuples for every port that was
+    re-applied.  Returns [] on Debian/Ubuntu (dpkg-divert already prevents
+    upgrades from clobbering the files).
+
+    Must be run as root.
+    """
+    if os.geteuid() != 0:
+        raise PermissionError("Must be run as root")
+
+    backend = _get_divert_backend()
+    if not isinstance(backend, NativeBackend):
+        return []
+
+    reapplied = []
+    for path in backend.list_paths():
+        if PATHS_DIR not in path:
+            continue
+
+        orig = path + ".orig"
+        if not os.path.exists(orig):
+            continue
+
+        custom_name = backend.get_custom_name(path)
+        if not custom_name:
+            log.warning(
+                "No stored name for %s — skipping (re-run 'portname rename' manually)", path
+            )
+            continue
+
+        current_desc = _read_description(path) if os.path.exists(path) else None
+        if current_desc == custom_name:
+            continue  # Still correct, nothing to do
+
+        route_name = os.path.basename(path).replace(".conf", "")
+        log.info("Re-applying rename for '%s' -> '%s'", route_name, custom_name)
+
+        content = _modify_description(orig, custom_name)
+        try:
+            with open(path, "w") as f:
+                f.write(content)
+        except OSError as e:
+            raise RuntimeError(f"Cannot write to {path}: {e}")
+
+        reapplied.append((route_name, custom_name))
+
+    if reapplied:
+        restart_pipewire()
+
+    return reapplied
 
 
 def _get_real_user():

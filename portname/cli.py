@@ -9,6 +9,7 @@ from portname import __version__
 from portname.core import (
     get_devices, is_renamed, get_original_description,
     rename_port, revert_port, revert_all, repair_distrib_diversions,
+    check_and_reapply,
 )
 from portname.automute import get_auto_mute_status, set_auto_mute, get_cards_with_auto_mute
 from portname.privilege import ensure_root_or_exit
@@ -125,6 +126,22 @@ def cmd_repair(args):
         sys.exit(1)
 
 
+def cmd_check(args):
+    """Detect and re-apply renames clobbered by a package upgrade."""
+    ensure_root_or_exit()
+    try:
+        reapplied = check_and_reapply()
+        if reapplied:
+            for route_name, custom_name in reapplied:
+                print(f"Re-applied: '{route_name}' -> '{custom_name}'")
+            print("Restarting PipeWire... done.")
+        else:
+            print("All renamed ports are intact. Nothing to fix.")
+    except RuntimeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_gui(args):
     """Launch the GUI."""
     try:
@@ -166,6 +183,12 @@ def main():
     am_p.add_argument("state", nargs="?", choices=["on", "off", "status"], default="status")
     am_p.add_argument("--card", "-c", help="ALSA card number")
 
+    # check
+    subparsers.add_parser(
+        "check",
+        help="Re-apply renames clobbered by a package upgrade (requires sudo; Arch/Fedora only)",
+    )
+
     # repair
     subparsers.add_parser("repair", help="Fix ports broken by old portname versions (requires sudo)")
 
@@ -190,6 +213,8 @@ def main():
         cmd_revert(args)
     elif args.command == "auto-mute":
         cmd_auto_mute(args)
+    elif args.command == "check":
+        cmd_check(args)
     elif args.command == "repair":
         cmd_repair(args)
     elif args.command == "gui":

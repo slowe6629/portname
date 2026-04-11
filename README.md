@@ -47,6 +47,9 @@ sudo portname revert analog-output-lineout
 # Revert all renamed ports
 sudo portname revert --all
 
+# Check for renames clobbered by a package upgrade and re-apply them (Arch/Fedora)
+sudo portname check
+
 # Toggle Auto-Mute Mode (fixes issue where front jack silences rear jacks)
 portname auto-mute off
 portname auto-mute on
@@ -61,7 +64,7 @@ Audio port names on Linux come from ALSA card profile path files in `/usr/share/
 2. Writes a modified copy with your custom name
 3. Restarts PipeWire so the change appears immediately
 
-Your custom names survive reboots. On **Debian/Ubuntu** the backup is registered with `dpkg-divert`, which also tells the package manager to skip the file on upgrades. On **other distros** (Arch, Fedora, etc.) the backup/restore logic is identical but there is no package-manager hook — a future upgrade of `alsa-card-profile` could overwrite the modified file, at which point re-running `portname rename` restores your name.
+Your custom names survive reboots. On **Debian/Ubuntu** the backup is registered with `dpkg-divert`, which also tells the package manager to skip the file on upgrades. On **other distros** (Arch, Fedora, etc.) the backup/restore logic is identical but there is no package-manager hook — an upgrade of `alsa-card-profile` can silently overwrite the modified file. Run `sudo portname check` after such an upgrade to detect and automatically re-apply any clobbered names. AUR/Copr package descriptions should note this and suggest adding a post-upgrade hook that calls `portname check`.
 
 ## Requirements
 
