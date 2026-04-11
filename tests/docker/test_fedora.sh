@@ -15,7 +15,7 @@ echo "=== Installing portname ==="
 pip3 install --break-system-packages -e /portname --quiet
 
 echo "=== Running unit tests ==="
-python3 -m unittest discover -v /portname/tests/
+cd /portname && python3 -m unittest discover -v tests/
 
 # Run shared end-to-end test
 source "$(dirname "$0")/test_common.sh"

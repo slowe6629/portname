@@ -57,7 +57,7 @@ jobs:
 
       - name: Smoke-test portname check (no daemon — expect graceful error or no-op)
         run: |
-          sudo portname check 2>&1 | grep -qiE "intact|pipewire|pw-dump|error" \
+          sudo $(which portname) check 2>&1 | grep -qiE "intact|pipewire|pw-dump|error" \
             && echo "PASS: check command exited cleanly" \
             || (echo "FAIL: unexpected output"; exit 1)
 

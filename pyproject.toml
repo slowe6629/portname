@@ -7,7 +7,7 @@ name = "portname"
 version = "1.0.0"
 description = "Rename PipeWire/ALSA audio ports as they appear in Sound Settings"
 readme = "README.md"
-license = "MIT"
+license = {text = "MIT"}
 requires-python = ">=3.8"
 dependencies = []
 keywords = ["pipewire", "alsa", "audio", "pulseaudio", "linux", "rename"]
