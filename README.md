@@ -66,13 +66,25 @@ Audio port names on Linux come from ALSA card profile path files in `/usr/share/
 
 Your custom names survive reboots. On **Debian/Ubuntu** the backup is registered with `dpkg-divert`, which also tells the package manager to skip the file on upgrades. On **other distros** (Arch, Fedora, etc.) the backup/restore logic is identical but there is no package-manager hook — an upgrade of `alsa-card-profile` can silently overwrite the modified file. Run `sudo portname check` after such an upgrade to detect and automatically re-apply any clobbered names. AUR/Copr package descriptions should note this and suggest adding a post-upgrade hook that calls `portname check`.
 
+## Compatibility
+
+| Distro | Status |
+|---|---|
+| Linux Mint 22 | ✅ Fully tested |
+| Ubuntu 22.10+ | ✅ Fully tested |
+| Arch Linux | ⚠️ Core features tested via CI — real-machine audio feedback not yet verified |
+| Fedora | ⚠️ Core features tested via CI — real-machine audio feedback not yet verified |
+| Other PipeWire distros | ⚠️ Should work, but untested |
+
+**Arch / Fedora users:** portname works on your distro, but hasn't been tested by a real person on real hardware yet. If something doesn't behave as expected — names not showing up in Sound Settings, the audio system not restarting, anything — please [open an issue](https://github.com/slowe6629/portname/issues) and describe what happened. That feedback is how we close the gap.
+
+Does not work on distros still using PulseAudio without PipeWire.
+
 ## Requirements
 
 - Linux with PipeWire (standard on most distros from 2022 onward)
 - Python 3.8+
 - GTK3 via PyGObject (pre-installed on most desktop Linux distros)
-
-**Note:** Tested on Linux Mint 22, Ubuntu 22.10+, and should work on any PipeWire-based distribution. Does not work on distros still using PulseAudio without PipeWire.
 
 ## Uninstall
 
