@@ -2,7 +2,7 @@
 
 Ever wished you could change "Line Out" to "JBL Headset" or "Headphones" to "Pebble Speakers" in your Sound Settings? Now you can.
 
-**Portname** lets you rename the audio input/output ports that appear in your system's Sound Settings panel. Works with PipeWire and ALSA on Debian/Ubuntu-based distros (Linux Mint, Ubuntu, Pop!_OS, etc.).
+**Portname** lets you rename the audio input/output ports that appear in your system's Sound Settings panel. Works with PipeWire and ALSA on any Linux distribution.
 
 ## Before & After
 
@@ -57,20 +57,19 @@ portname auto-mute status
 
 Audio port names on Linux come from ALSA card profile path files in `/usr/share/alsa-card-profile/mixer/paths/`. Portname:
 
-1. Uses `dpkg-divert` to safely back up the original file
+1. Backs up the original file to `<name>.conf.orig`
 2. Writes a modified copy with your custom name
 3. Restarts PipeWire so the change appears immediately
 
-Your custom names survive reboots. The originals are protected from package updates via `dpkg-divert`, so system updates won't overwrite your changes.
+Your custom names survive reboots. On **Debian/Ubuntu** the backup is registered with `dpkg-divert`, which also tells the package manager to skip the file on upgrades. On **other distros** (Arch, Fedora, etc.) the backup/restore logic is identical but there is no package-manager hook — a future upgrade of `alsa-card-profile` could overwrite the modified file, at which point re-running `portname rename` restores your name.
 
 ## Requirements
 
-- **Debian/Ubuntu-based distro** (Linux Mint, Ubuntu, Pop!_OS, etc.) — required for `dpkg-divert` backup support
-- PipeWire (standard on Linux Mint 22+, Ubuntu 22.10+)
+- Linux with PipeWire (standard on most distros from 2022 onward)
 - Python 3.8+
 - GTK3 via PyGObject (pre-installed on most desktop Linux distros)
 
-**Note:** Currently only tested on Linux Mint 22. Does not work on non-Debian distros (Fedora, Arch) due to `dpkg-divert` dependency, or on distros still using PulseAudio without PipeWire.
+**Note:** Tested on Linux Mint 22, Ubuntu 22.10+, and should work on any PipeWire-based distribution. Does not work on distros still using PulseAudio without PipeWire.
 
 ## Uninstall
 

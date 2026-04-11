@@ -11,6 +11,7 @@ import subprocess
 log = logging.getLogger(__name__)
 
 _DEFAULT_PATHS_DIR = "/usr/share/alsa-card-profile/mixer/paths"
+_STATE_FILE = "/var/lib/portname/state.json"
 
 # Allow override for testing, but ignore it when running as root to prevent
 # a malicious env var from redirecting file operations during privilege escalation.
@@ -21,6 +22,120 @@ else:
 
 # Port names must be reasonable: 1-64 chars, no control characters
 _VALID_NAME_RE = re.compile(r"^[^\x00-\x1f]{1,64}$")
+
+
+class DpkgDivertBackend:
+    """File-protection backend using dpkg-divert (Debian/Ubuntu only)."""
+
+    def add(self, path):
+        """Register a diversion: atomically move path -> path.orig."""
+        try:
+            subprocess.run(
+                ["dpkg-divert", "--local", "--rename", "--divert", path + ".orig", "--add", path],
+                check=True, capture_output=True, text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"dpkg-divert failed: {e.stderr.strip() or 'unknown error'}")
+
+    def remove(self, path):
+        """Remove the diversion and restore path.orig -> path."""
+        try:
+            subprocess.run(
+                ["dpkg-divert", "--local", "--rename", "--divert", path + ".orig", "--remove", path],
+                check=True, capture_output=True, text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"dpkg-divert revert failed: {e.stderr.strip() or 'unknown error'}")
+
+    def list_paths(self):
+        """Return all locally-diverted file paths (original locations, not .orig)."""
+        result = subprocess.run(
+            ["dpkg-divert", "--list"], capture_output=True, text=True
+        )
+        paths = []
+        for line in result.stdout.splitlines():
+            if "local diversion" not in line:
+                continue
+            parts = line.split()
+            try:
+                idx = parts.index("of")
+                paths.append(parts[idx + 1])
+            except (ValueError, IndexError):
+                continue
+        return paths
+
+
+class NativeBackend:
+    """Distro-agnostic backend: direct filesystem operations + JSON state file.
+
+    On non-Debian systems there is no package-manager hook to protect the
+    modified files from being overwritten by an upgrade; that is a known
+    limitation.  Everything else (backup, restore, tracking) works identically.
+    """
+
+    def __init__(self, state_file=_STATE_FILE):
+        self._state_file = state_file
+
+    def _load(self):
+        try:
+            with open(self._state_file) as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return {"diversions": {}}
+
+    def _save(self, state):
+        os.makedirs(os.path.dirname(self._state_file), exist_ok=True)
+        tmp = self._state_file + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(state, f, indent=2)
+        os.replace(tmp, self._state_file)
+
+    def add(self, path):
+        """Back up path -> path.orig and record the diversion."""
+        backup = path + ".orig"
+        try:
+            os.rename(path, backup)
+        except OSError as e:
+            raise RuntimeError(f"Failed to back up {path}: {e}")
+        state = self._load()
+        state["diversions"][path] = {"backup": backup}
+        self._save(state)
+
+    def remove(self, path):
+        """Restore path.orig -> path and remove the diversion record."""
+        backup = path + ".orig"
+        try:
+            if os.path.exists(backup):
+                os.rename(backup, path)
+        except OSError as e:
+            raise RuntimeError(f"Failed to restore {path}: {e}")
+        state = self._load()
+        state["diversions"].pop(path, None)
+        self._save(state)
+
+    def list_paths(self):
+        """Return all diverted file paths recorded in the state file."""
+        return list(self._load()["diversions"].keys())
+
+
+_divert_backend = None
+
+
+def _get_divert_backend():
+    """Return the active divert backend, auto-detected from available tools."""
+    global _divert_backend
+    if _divert_backend is None:
+        if shutil.which("dpkg-divert"):
+            _divert_backend = DpkgDivertBackend()
+        else:
+            _divert_backend = NativeBackend()
+    return _divert_backend
+
+
+def _set_divert_backend(backend):
+    """Override the active divert backend. For testing only."""
+    global _divert_backend
+    _divert_backend = backend
 
 
 def validate_port_name(name):
@@ -117,7 +232,7 @@ def get_path_file(route_name):
 
 
 def is_renamed(route_name):
-    """Check if a port has been renamed (dpkg-divert is active)."""
+    """Check if a port has been renamed (backup .orig file is present)."""
     path = get_path_file(route_name)
     return os.path.exists(path + ".orig")
 
@@ -202,17 +317,10 @@ def rename_port(route_name, new_name):
     log.info("Renaming port '%s' to '%s'", route_name, new_name)
     log.debug("Path file: %s", path)
 
-    # Set up dpkg-divert if not already done
+    # Back up the original file if not already done
     if not is_renamed(route_name):
-        log.debug("Setting up dpkg-divert for %s", path)
-        try:
-            subprocess.run(
-                ["dpkg-divert", "--local", "--rename", "--divert", path + ".orig", "--add", path],
-                check=True, capture_output=True, text=True,
-            )
-        except subprocess.CalledProcessError as e:
-            log.error("dpkg-divert failed: %s", e.stderr.strip())
-            raise RuntimeError(f"dpkg-divert failed: {e.stderr.strip() or 'unknown error'}")
+        log.debug("Backing up %s", path)
+        _get_divert_backend().add(path)
 
     # Read from .orig, write modified version to the main path
     content = _modify_description(path + ".orig", new_name)
@@ -242,16 +350,9 @@ def revert_port(route_name):
     if os.path.exists(path):
         os.remove(path)
 
-    # Remove the divert (restores .orig to original location)
-    log.debug("Removing dpkg-divert for %s", path)
-    try:
-        subprocess.run(
-            ["dpkg-divert", "--local", "--rename", "--divert", path + ".orig", "--remove", path],
-            check=True, capture_output=True, text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        log.error("dpkg-divert revert failed: %s", e.stderr.strip())
-        raise RuntimeError(f"dpkg-divert revert failed: {e.stderr.strip() or 'unknown error'}")
+    # Restore original (moves path.orig -> path)
+    log.debug("Restoring original file for %s", path)
+    _get_divert_backend().remove(path)
 
     restart_pipewire()
     log.info("Port '%s' reverted successfully", route_name)
@@ -262,42 +363,22 @@ def revert_all():
     if os.geteuid() != 0:
         raise PermissionError("Must be run as root")
 
-    result = subprocess.run(
-        ["dpkg-divert", "--list"], capture_output=True, text=True
-    )
     reverted = []
-    for line in result.stdout.splitlines():
-        if PATHS_DIR in line and "local diversion" in line:
-            # Extract the original path from: "local diversion of /path/to/file.conf to /path/to/file.conf.orig"
-            parts = line.split()
-            try:
-                idx = parts.index("of")
-                path = parts[idx + 1]
-                route_name = os.path.basename(path).replace(".conf", "")
-                revert_port(route_name)
-                reverted.append(route_name)
-            except (ValueError, IndexError):
-                continue
-
+    for path in _get_divert_backend().list_paths():
+        if PATHS_DIR not in path:
+            continue
+        route_name = os.path.basename(path).replace(".conf", "")
+        revert_port(route_name)
+        reverted.append(route_name)
     return reverted
 
 
 def get_all_renamed():
     """Return a list of all currently renamed route names."""
-    result = subprocess.run(
-        ["dpkg-divert", "--list"], capture_output=True, text=True
-    )
     renamed = []
-    for line in result.stdout.splitlines():
-        if PATHS_DIR in line and "local diversion" in line:
-            parts = line.split()
-            try:
-                idx = parts.index("of")
-                path = parts[idx + 1]
-                route_name = os.path.basename(path).replace(".conf", "")
-                renamed.append(route_name)
-            except (ValueError, IndexError):
-                continue
+    for path in _get_divert_backend().list_paths():
+        if PATHS_DIR in path:
+            renamed.append(os.path.basename(path).replace(".conf", ""))
     return renamed
 
 
@@ -309,10 +390,14 @@ def repair_distrib_diversions():
     files behind with an active diversion — making ports vanish from the list.
 
     This scans for those orphaned diversions, removes them, and restores the
-    original .conf files. Must be run as root.
+    original .conf files. Only relevant on Debian/Ubuntu; returns [] elsewhere.
+    Must be run as root.
 
     Returns a list of repaired route names.
     """
+    if not shutil.which("dpkg-divert"):
+        return []
+
     if os.geteuid() != 0:
         raise PermissionError("Must be run as root")
 
