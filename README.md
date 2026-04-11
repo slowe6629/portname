@@ -18,6 +18,18 @@ Before:                              After:
 ## Install
 
 ```bash
+pip install portname
+```
+
+To update to the latest version:
+
+```bash
+pip install --upgrade portname
+```
+
+**Alternative — install from source:**
+
+```bash
 git clone https://github.com/slowe6629/portname.git
 cd portname
 chmod +x install.sh
