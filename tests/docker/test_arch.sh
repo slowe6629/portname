@@ -8,10 +8,10 @@ set -euo pipefail
 export PORTNAME_SKIP_RESTART=1
 
 echo "=== Installing dependencies (Arch) ==="
-pacman -Sy --noconfirm python alsa-card-profiles
+pacman -Sy --noconfirm python python-pip alsa-card-profiles
 
 echo "=== Installing portname ==="
-pip install -e /portname --quiet
+pip install --break-system-packages -e /portname --quiet
 
 echo "=== Running unit tests ==="
 python -m unittest discover -v /portname/tests/

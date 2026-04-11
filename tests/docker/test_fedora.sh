@@ -8,10 +8,11 @@ set -euo pipefail
 export PORTNAME_SKIP_RESTART=1
 
 echo "=== Installing dependencies (Fedora) ==="
-dnf install -y python3 python3-pip alsa-card-profiles
+# alsa-card-profiles is a subpackage of pipewire on Fedora 41+
+dnf install -y python3 python3-pip pipewire-alsa
 
 echo "=== Installing portname ==="
-pip3 install -e /portname --quiet
+pip3 install --break-system-packages -e /portname --quiet
 
 echo "=== Running unit tests ==="
 python3 -m unittest discover -v /portname/tests/
