@@ -27,11 +27,11 @@ def run_as_root(args):
     if portname_path:
         cmd = ["pkexec", portname_path] + args
     else:
-        # Not installed system-wide — find the project root from this file's location
+        # Not installed system-wide — find the project root from this file's location.
+        # Only pass the project root, never the user's existing PYTHONPATH, to avoid
+        # carrying a user-controlled path into the root execution context.
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        env = os.environ.copy()
-        env["PYTHONPATH"] = project_root + ((":" + env["PYTHONPATH"]) if env.get("PYTHONPATH") else "")
-        cmd = ["pkexec", "env", f"PYTHONPATH={env['PYTHONPATH']}", sys.executable, "-m", "portname"] + args
+        cmd = ["pkexec", "env", f"PYTHONPATH={project_root}", sys.executable, "-m", "portname"] + args
         return subprocess.run(cmd, capture_output=True, text=True)
 
     return subprocess.run(cmd, capture_output=True, text=True)
