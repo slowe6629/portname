@@ -28,5 +28,5 @@ include = ["portname*"]
 portname = "portname.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/slowe6629/portname"
-Issues = "https://github.com/slowe6629/portname/issues"
+Homepage = "https://github.com/offbyonebit/portname"
+Issues = "https://github.com/offbyonebit/portname/issues"

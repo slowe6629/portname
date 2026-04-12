@@ -30,7 +30,7 @@ pip install --upgrade portname
 **Alternative — install from source:**
 
 ```bash
-git clone https://github.com/slowe6629/portname.git
+git clone https://github.com/offbyonebit/portname.git
 cd portname
 chmod +x install.sh
 ./install.sh
@@ -88,7 +88,7 @@ Your custom names survive reboots. On **Debian/Ubuntu** the backup is registered
 | Fedora | ⚠️ Core features tested via CI — real-machine audio feedback not yet verified |
 | Other PipeWire distros | ⚠️ Should work, but untested |
 
-**Arch / Fedora users:** portname works on your distro, but hasn't been tested by a real person on real hardware yet. If something doesn't behave as expected — names not showing up in Sound Settings, the audio system not restarting, anything — please [open an issue](https://github.com/slowe6629/portname/issues) and describe what happened. That feedback is how we close the gap.
+**Arch / Fedora users:** portname works on your distro, but hasn't been tested by a real person on real hardware yet. If something doesn't behave as expected — names not showing up in Sound Settings, the audio system not restarting, anything — please [open an issue](https://github.com/offbyonebit/portname/issues) and describe what happened. That feedback is how we close the gap.
 
 Does not work on distros still using PulseAudio without PipeWire.
 
