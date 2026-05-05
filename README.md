@@ -1,4 +1,4 @@
-# Portname — Rename Audio Ports on Linux
+# Portname: Rename Audio Ports on Linux
 
 Ever wished you could change "Line Out" to "JBL Headset" or "Headphones" to "Pebble Speakers" in your Sound Settings? Now you can.
 
@@ -65,7 +65,7 @@ Your custom names survive reboots. The originals are protected from package upda
 
 ## Requirements
 
-- **Debian/Ubuntu-based distro** (Linux Mint, Ubuntu, Pop!_OS, etc.) — required for `dpkg-divert` backup support
+- **Debian/Ubuntu-based distro** (Linux Mint, Ubuntu, Pop!_OS, etc.), required for `dpkg-divert` backup support
 - PipeWire (standard on Linux Mint 22+, Ubuntu 22.10+)
 - Python 3.8+
 - GTK3 via PyGObject (pre-installed on most desktop Linux distros)
